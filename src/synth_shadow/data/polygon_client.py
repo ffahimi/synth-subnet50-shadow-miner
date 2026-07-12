@@ -7,8 +7,10 @@ same output schema.
 
 from __future__ import annotations
 
+import getpass
 import logging
 import os
+import sys
 from datetime import timedelta
 from urllib.parse import urlparse
 
@@ -21,16 +23,19 @@ from synth_shadow.utils.time import utc_now
 LOG = logging.getLogger(__name__)
 
 BASE_URL = "https://api.polygon.io"
+PLACEHOLDER_API_KEYS = {
+    "your_polygon_key_here",
+    "your_valid_polygon_key",
+    "your_polygon_key",
+}
 
 
 class PolygonClient:
     """Small Polygon REST client for aggregate bars."""
 
     def __init__(self, api_key: str | None = None, timeout_seconds: int = 30) -> None:
-        self.api_key = api_key or os.getenv("POLYGON_API_KEY")
+        self.api_key = _resolve_api_key(api_key)
         self.timeout_seconds = timeout_seconds
-        if not self.api_key:
-            raise ValueError("POLYGON_API_KEY is required in the environment or .env file.")
 
     def fetch_aggregates(
         self,
@@ -61,7 +66,13 @@ class PolygonClient:
             safe_url = self._without_key(url)
             LOG.debug("Requesting Polygon aggregates: %s", safe_url)
             response = requests.get(url, params=params, timeout=self.timeout_seconds)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except requests.HTTPError as exc:
+                raise requests.HTTPError(
+                    _sanitized_http_error_message(response),
+                    response=response,
+                ) from exc
             payload = response.json()
             status = payload.get("status")
             if status not in {"OK", "DELAYED"}:
@@ -111,3 +122,33 @@ class PolygonClient:
     def _without_key(url: str) -> str:
         parsed = urlparse(url)
         return parsed._replace(query="").geturl()
+
+
+def _resolve_api_key(api_key: str | None = None) -> str:
+    key = (api_key or os.getenv("POLYGON_API_KEY") or "").strip()
+    if key and key not in PLACEHOLDER_API_KEYS:
+        return key
+
+    if key in PLACEHOLDER_API_KEYS:
+        LOG.warning("POLYGON_API_KEY is set to a placeholder value; prompting for a real key.")
+
+    if sys.stdin.isatty():
+        prompted = getpass.getpass("Enter POLYGON_API_KEY: ").strip()
+        if prompted and prompted not in PLACEHOLDER_API_KEYS:
+            os.environ["POLYGON_API_KEY"] = prompted
+            return prompted
+
+    raise ValueError(
+        "POLYGON_API_KEY is required. Set it in the environment/.env, or run from an "
+        "interactive terminal to be prompted. Do not commit the key to git."
+    )
+
+
+def _sanitized_http_error_message(response: requests.Response) -> str:
+    reason = response.reason.decode("utf-8", "replace") if isinstance(response.reason, bytes) else response.reason
+    safe_url = PolygonClient._without_key(response.url)
+    if 400 <= response.status_code < 500:
+        return f"{response.status_code} Client Error: {reason} for url: {safe_url}"
+    if 500 <= response.status_code < 600:
+        return f"{response.status_code} Server Error: {reason} for url: {safe_url}"
+    return f"HTTP error {response.status_code}: {reason} for url: {safe_url}"

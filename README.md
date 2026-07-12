@@ -89,6 +89,22 @@ LOG_LEVEL=DEBUG
 EOF
 ```
 
+Do not commit `.env` or a real Polygon key. The repo ignores `.env`, and the
+CLI treats placeholder values such as `your_polygon_key_here` as missing. If
+`POLYGON_API_KEY` is not loaded and the command is running in an interactive
+terminal, it prompts:
+
+```text
+Enter POLYGON_API_KEY:
+```
+
+For long-running `screen` jobs, export the key or create `.env` before starting
+the loop:
+
+```bash
+export POLYGON_API_KEY='your_real_polygon_key'
+```
+
 For development tools:
 
 ```bash
