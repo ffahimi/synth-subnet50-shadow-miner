@@ -29,12 +29,13 @@ from synth_shadow.storage.forecast_store import (
     save_processed_features,
     save_raw_bars,
 )
+from synth_shadow.storage.registry import ForecastRegistry
 from synth_shadow.utils.time import utc_now
 
 LOG = logging.getLogger(__name__)
 
 
-def run_btc_forecast(config: dict) -> dict:
+def run_btc_forecast(config: dict, prompt_start_time: str | None = None) -> dict:
     """Fetch Polygon BTC data, extract features, generate paths, and save artifacts."""
     LOG.info("Starting Polygon BTC shadow forecast pipeline.")
     client = PolygonClient()
@@ -63,6 +64,7 @@ def run_btc_forecast(config: dict) -> dict:
         "polygon_ticker": config["polygon_ticker"],
         "generated_at": utc_now().isoformat(),
         "data_cutoff": state.timestamp,
+        "prompt_start_time": prompt_start_time,
         "num_raw_bars": len(raw_bars),
         "num_feature_rows": len(features),
         "num_session_blocks": len(library),
@@ -71,5 +73,7 @@ def run_btc_forecast(config: dict) -> dict:
         "debug": bool(config.get("debug", False)),
     }
     forecast_dir = save_forecast_run(paths, timestamps, metadata, state.to_dict(), config)
+    registry = ForecastRegistry(config["storage"]["registry_path"])
+    registry.register_forecast(str(forecast_dir), metadata)
     LOG.info("Completed BTC forecast: %s", metadata)
     return {"forecast_dir": str(forecast_dir), "metadata": metadata}

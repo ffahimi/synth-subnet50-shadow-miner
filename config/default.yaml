@@ -7,6 +7,18 @@ forecast:
   interval_seconds: 300
   num_paths: 1000
   random_seed: 42
+  points_per_path: 289
+
+synth:
+  base_url: https://api.synthdata.co
+  asset: BTC
+  time_increment: 300
+  time_length: 86400
+  prompt_lookback_days: 3
+  prompt_forward_hours: 3
+  score_lookback_days: 3
+  competition: crypto-24h
+  fetch_rewards_in_cycle: false
 
 history:
   lookback_days: 14
@@ -52,5 +64,18 @@ storage:
   raw_dir: data/raw
   processed_dir: data/processed
   forecast_dir: data/forecasts
+  realized_dir: data/realized
+  reports_dir: data/reports
+  registry_path: data/registry.sqlite3
   raw_format: csv
   processed_format: csv
+
+inspection:
+  sample_paths: 3
+  sample_points: 12
+  checkpoints:
+    t0: 0
+    1h: 12
+    4h: 48
+    12h: 144
+    24h: 288

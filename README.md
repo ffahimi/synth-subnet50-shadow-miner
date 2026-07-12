@@ -52,12 +52,41 @@ Run the first BTC pipeline:
 synth-shadow generate-btc --debug
 ```
 
+Run the first full Synth shadow version:
+
+```bash
+synth-shadow run-synth-shadow --debug
+```
+
+This executes the implemented blocks together:
+
+```text
+sync Synth BTC prompts
+generate a Polygon BTC forecast for the latest prompt
+inspect generated paths and percentile bands
+try to score any matured forecasts
+fetch latest Synth score/reward/leaderboard context
+```
+
+Individual debug commands:
+
+```bash
+synth-shadow sync-prompts --debug
+synth-shadow generate-latest-prompt --debug
+synth-shadow inspect-latest --debug
+synth-shadow score-matured --debug
+synth-shadow benchmarks --debug
+```
+
 Outputs are written under:
 
 ```text
 data/raw/          raw Polygon 5-minute bars
 data/processed/    repaired bars with sessions and features
 data/forecasts/    paths.npz, timestamps.csv, metadata.json, features.json
+data/realized/     Synth realized paths when matured forecasts can be scored
+data/reports/      latest forecast summary JSON
+data/registry.sqlite3  local prompt/forecast/score registry
 ```
 
 ## First Target

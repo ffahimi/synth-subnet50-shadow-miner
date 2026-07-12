@@ -11,9 +11,14 @@ __pycache__/
 data/raw/*
 data/processed/*
 data/forecasts/*
+data/realized/*
+data/reports/*
+data/registry.sqlite3
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/forecasts/.gitkeep
+!data/realized/.gitkeep
+!data/reports/.gitkeep
 
 logs/
 wallets/
