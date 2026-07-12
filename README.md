@@ -135,6 +135,35 @@ This fetches recent Polygon bars for the selected asset, extracts features, buil
 library, generates `1000 x 289` paths, saves files under `data/forecasts/<ASSET>/`,
 and registers the run in `data/registry.sqlite3`.
 
+Run one live forecast with detailed sanity diagnostics:
+
+```bash
+.venv/bin/python -m synth_shadow.cli forecast-sanity --asset BTC --debug
+```
+
+For a faster latency probe with fewer paths:
+
+```bash
+.venv/bin/python -m synth_shadow.cli forecast-sanity --asset BTC --debug --num-paths 8
+```
+
+The sanity output prints:
+
+```text
+stage latency in seconds: Polygon fetch, repair, features, library, generation, save, registry
+raw/repaired/feature row counts
+raw and feature date ranges
+5-minute resolution checks
+causality checks that features and bars stop at the prediction timestamp
+path shape, timestamp count, timestamp spacing, finite/positive checks
+current price alignment and final-path percentiles
+```
+
+`forecast-sanity` saves and registers the forecast. For live CRPS scoring
+against Synth realized paths, prefer the prompt-aligned full cycle below.
+Standalone sanity forecasts are registered with `debug` status unless a
+prompt start time is supplied by the orchestration layer.
+
 ## Public Repo / Private Model Split
 
 This repository is designed to be safe as a public harness. Keep data adapters,
@@ -265,6 +294,12 @@ Run all implemented modules together:
 synth-shadow run-synth-shadow --debug
 ```
 
+Run the same full cycle with forecast sanity diagnostics printed every time:
+
+```bash
+.venv/bin/python -m synth_shadow.cli run-synth-shadow-sanity --asset BTC --debug
+```
+
 This does:
 
 ```text
@@ -277,6 +312,9 @@ This does:
 7. join CRPS and rewards by miner UID
 ```
 
+The sanity version also prints the live forecast latency, data, and path checks
+before it tries to score matured pending forecasts.
+
 Fresh forecasts usually cannot be scored immediately because Synth's realized
 path is only available after the 24h horizon has matured. In that case
 `score-matured` logs a 404 warning and continues.
@@ -286,8 +324,19 @@ Useful individual commands:
 ```bash
 synth-shadow sync-prompts --debug
 synth-shadow generate-latest-prompt --asset ETH --debug
+synth-shadow generate-sanity-latest-prompt --asset BTC --debug
 synth-shadow score-matured --debug
 synth-shadow benchmarks --asset XAU --debug
+```
+
+Example `screen` loop for a one-day BTC shadow run:
+
+```bash
+while true; do
+  echo "===== BTC live sanity cycle $(date -u +%Y-%m-%dT%H:%M:%SZ) ====="
+  .venv/bin/python -m synth_shadow.cli run-synth-shadow-sanity --asset BTC --debug
+  sleep 300
+done 2>&1 | tee -a logs/btc_live_sanity_cycle.log
 ```
 
 ## CRPS And Reward Benchmarks

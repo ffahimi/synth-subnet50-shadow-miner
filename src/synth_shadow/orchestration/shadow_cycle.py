@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from synth_shadow.inspection.forecast import inspect_forecast
+from synth_shadow.inspection.live_sanity import run_live_forecast_sanity
 from synth_shadow.models.btc_generator import run_asset_forecast
 from synth_shadow.scoring.evaluator import score_matured_forecasts
 from synth_shadow.scoring.benchmarks import join_scores_to_leaderboard
@@ -40,6 +41,18 @@ def generate_for_latest_prompt(config: dict) -> dict[str, Any]:
     else:
         LOG.info("Generating forecast for latest synced prompt_start_time=%s", prompt_start)
     return run_asset_forecast(config, prompt_start_time=prompt_start)
+
+
+def generate_sanity_for_latest_prompt(config: dict) -> dict[str, Any]:
+    """Generate a prompt-aligned forecast with live sanity diagnostics."""
+    registry = ForecastRegistry(config["storage"]["registry_path"])
+    prompts = registry.list_prompts()
+    prompt_start = prompts[0]["start_time"] if prompts else None
+    if prompt_start is None:
+        LOG.warning("No synced prompt available; generating sanity forecast unaligned.")
+    else:
+        LOG.info("Generating sanity forecast for latest synced prompt_start_time=%s", prompt_start)
+    return run_live_forecast_sanity(config, prompt_start_time=prompt_start)
 
 
 def fetch_benchmarks(config: dict) -> dict[str, Any]:
@@ -83,4 +96,29 @@ def run_shadow_cycle(config: dict) -> dict[str, Any]:
     }
     LOG.info("Completed full Synth shadow cycle.")
     LOG.debug("Full cycle result: %s", result)
+    return result
+
+
+def run_shadow_cycle_sanity(config: dict) -> dict[str, Any]:
+    """Run the full shadow cycle with live forecast sanity diagnostics."""
+    LOG.info("Starting full Synth shadow sanity cycle.")
+    prompt_result = sync_prompts(config)
+    forecast_result = generate_sanity_for_latest_prompt(config)
+    inspection = inspect_forecast(config, forecast_result["forecast_dir"])
+    score_results = score_matured_forecasts(config)
+    benchmarks = fetch_benchmarks(config)
+    result = {
+        "prompts": prompt_result,
+        "forecast": forecast_result,
+        "inspection": {
+            "forecast_dir": inspection["forecast_dir"],
+            "shape": inspection["shape"],
+            "final_distribution": inspection["final_distribution"],
+            "aggregate_checkpoints": inspection["aggregate_checkpoints"],
+        },
+        "scores": score_results,
+        "benchmarks": benchmarks,
+    }
+    LOG.info("Completed full Synth shadow sanity cycle.")
+    LOG.debug("Full sanity cycle result: %s", result)
     return result
