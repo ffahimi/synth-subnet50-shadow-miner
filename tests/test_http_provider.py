@@ -60,6 +60,7 @@ def test_http_provider_posts_forecast_request_and_parses_response(monkeypatch):
     assert calls[0]["json"]["asset"] == "BTC"
     assert calls[0]["json"]["num_paths"] == 2
     assert calls[0]["json"]["interval_seconds"] == 300
+    assert "origin" not in calls[0]["json"]
     assert forecast.paths.shape == (2, 3)
     assert np.allclose(forecast.paths[:, 0], 100.0)
     assert forecast.metadata["provider"] == "http"
@@ -82,3 +83,29 @@ def test_http_provider_rejects_wrong_path_shape(monkeypatch):
 
     with pytest.raises(ValueError, match="does not match"):
         HttpForecastProvider("http://127.0.0.1:8088/predict").generate(_config())
+
+
+def test_http_provider_posts_backtest_origin(monkeypatch):
+    calls = []
+
+    def fake_post(url, json, timeout):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return _Response(
+            {
+                "model_version": "private_btc_v1",
+                "data_cutoff": "2026-07-12T16:30:00Z",
+                "current_price": 100.0,
+                "paths": [[100.0, 101.0, 102.0], [100.0, 99.0, 98.0]],
+            }
+        )
+
+    monkeypatch.setattr("synth_shadow.forecasting.http_provider.requests.post", fake_post)
+
+    HttpForecastProvider("http://127.0.0.1:8088/predict").generate(
+        _config(),
+        prompt_start_time="2026-07-12T16:30:00+00:00",
+        origin="2026-07-12T16:30:00Z",
+    )
+
+    assert calls[0]["json"]["origin"] == "2026-07-12T16:30:00+00:00"
+    assert calls[0]["json"]["prompt_start_time"] == "2026-07-12T16:30:00+00:00"

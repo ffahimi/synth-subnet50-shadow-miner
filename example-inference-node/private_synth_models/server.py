@@ -28,6 +28,7 @@ class PredictRequest(BaseModel):
     asset: str = Field(default="BTC")
     polygon_ticker: str = Field(default="X:BTCUSD")
     prompt_start_time: datetime | None = None
+    origin: datetime | None = None
     horizon_seconds: int = Field(default=86400, gt=0)
     interval_seconds: int = Field(default=300, gt=0)
     num_paths: int = Field(default=1000, gt=0, le=10000)
@@ -115,6 +116,7 @@ async def predict(request: PredictRequest) -> PredictResponse:
             metadata={
                 "polygon_ticker": request.polygon_ticker,
                 "prompt_start_time": _format_optional_dt(request.prompt_start_time),
+                "origin": _format_optional_dt(request.origin),
                 "generated_at": _format_optional_dt(request.generated_at),
             },
         )
@@ -125,7 +127,7 @@ async def predict(request: PredictRequest) -> PredictResponse:
 
 
 def _request_anchor_time(request: PredictRequest) -> pd.Timestamp:
-    ts = request.prompt_start_time or datetime.now(timezone.utc)
+    ts = request.origin or request.prompt_start_time or datetime.now(timezone.utc)
     anchor = pd.Timestamp(ts)
     if anchor.tzinfo is None:
         anchor = anchor.tz_localize("UTC")
@@ -159,4 +161,3 @@ def _format_optional_dt(value: datetime | None) -> str | None:
     else:
         ts = ts.tz_convert("UTC")
     return _format_ts(ts)
-

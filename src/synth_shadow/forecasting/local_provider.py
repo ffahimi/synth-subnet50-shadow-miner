@@ -22,7 +22,14 @@ class LocalForecastProvider:
 
     provider_name = "local"
 
-    def generate(self, config: dict[str, Any], prompt_start_time: str | None = None) -> ProviderForecast:
+    def generate(
+        self,
+        config: dict[str, Any],
+        prompt_start_time: str | None = None,
+        origin: Any | None = None,
+    ) -> ProviderForecast:
+        if origin is not None:
+            raise ValueError("LocalForecastProvider does not support historical origin generation.")
         client = PolygonClient()
         raw_bars = client.fetch_recent(config)
         save_raw_bars(raw_bars, config)

@@ -15,6 +15,9 @@ import pandas as pd
 from synth_shadow.data.polygon_client import PolygonClient
 from synth_shadow.data.schema import repair_missing_bars
 from synth_shadow.features.pipeline import build_feature_frame
+from synth_shadow.forecasting.protocol import ProviderForecast
+from synth_shadow.forecasting.http_provider import configured_endpoint
+from synth_shadow.forecasting.loader import load_forecast_provider
 from synth_shadow.models.current_state import extract_current_state
 from synth_shadow.models.loader import configured_model_entrypoint, load_forecast_model
 from synth_shadow.models.path_sampler import PathSampler
@@ -83,9 +86,11 @@ def run_rolling_backtest(
     block_bars = int(run_config["sampling"]["block_minutes"] * 60 / interval_seconds)
     horizon_steps = int(run_config["forecast"]["horizon_seconds"] / interval_seconds)
     points_per_path = horizon_steps + 1
-    model = load_forecast_model(run_config)
-    model_version = str(getattr(model, "model_version", model.__class__.__name__))
-    model_entrypoint = configured_model_entrypoint(run_config)
+    endpoint = configured_endpoint(run_config)
+    provider = load_forecast_provider(run_config) if endpoint else None
+    model = None if provider else load_forecast_model(run_config)
+    model_version = "http_provider" if provider else str(getattr(model, "model_version", model.__class__.__name__))
+    model_entrypoint = endpoint if provider else configured_model_entrypoint(run_config)
 
     for idx, origin in enumerate(origins, start=1):
         past_bars = bars[bars["timestamp"] <= origin].copy()
@@ -95,26 +100,38 @@ def run_rolling_backtest(
             LOG.warning("Skipping origin=%s, future path incomplete rows=%s", origin, len(future))
             continue
         try:
-            library = build_session_library(past_features, block_bars)
-            state = extract_current_state(past_features)
-            sampler = PathSampler(library, seed=int(run_config["forecast"]["random_seed"]) + idx)
-            output = model.generate(
-                ForecastContext(
-                    config=run_config,
-                    bars=past_bars,
-                    features=past_features,
-                    library=library,
-                    state=state,
-                    sampler=sampler,
+            if provider:
+                output = provider.generate(
+                    run_config,
+                    prompt_start_time=_format_origin(origin),
                     origin=origin,
                 )
-            )
-            paths = output.paths
+                _validate_http_backtest_output(output, origin)
+                paths = output.paths
+                current_price = float(output.metadata["current_price"])
+                model_version = str(output.metadata.get("model_version", model_version))
+            else:
+                library = build_session_library(past_features, block_bars)
+                state = extract_current_state(past_features)
+                sampler = PathSampler(library, seed=int(run_config["forecast"]["random_seed"]) + idx)
+                output = model.generate(
+                    ForecastContext(
+                        config=run_config,
+                        bars=past_bars,
+                        features=past_features,
+                        library=library,
+                        state=state,
+                        sampler=sampler,
+                        origin=origin,
+                    )
+                )
+                paths = output.paths
+                current_price = state.price
             realized = future["close"].to_numpy(dtype=float)
             score = score_synth_btc_24h(paths, realized)
             row = {
                 "origin": str(origin),
-                "current_price": state.price,
+                "current_price": current_price,
                 "realized_final": float(realized[-1]),
                 "forecast_final_median": float(np.median(paths[:, -1])),
                 "raw_crps": float(score["raw_crps"]),
@@ -201,6 +218,29 @@ def _select_origins(
     if max_origins is not None:
         origins = origins[-max_origins:]
     return [pd.Timestamp(origin) for origin in origins]
+
+
+def _validate_http_backtest_output(output: ProviderForecast, origin: pd.Timestamp) -> None:
+    origin = _utc_timestamp(origin)
+    first_timestamp = _utc_timestamp(output.timestamps[0])
+    if first_timestamp != origin:
+        raise ValueError(
+            f"HTTP backtest forecast first timestamp {first_timestamp} does not match origin {origin}."
+        )
+    data_cutoff = _utc_timestamp(output.metadata["data_cutoff"])
+    if data_cutoff > origin:
+        raise ValueError(f"HTTP backtest data_cutoff {data_cutoff} is after origin {origin}.")
+
+
+def _format_origin(origin: pd.Timestamp) -> str:
+    return _utc_timestamp(origin).isoformat()
+
+
+def _utc_timestamp(value: Any) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
 
 
 def _summarize_backtest(rows: list[dict[str, Any]], config: dict) -> dict[str, Any]:

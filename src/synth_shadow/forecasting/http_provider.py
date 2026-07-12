@@ -26,7 +26,12 @@ class HttpForecastProvider:
         self.endpoint = endpoint
         self.timeout_seconds = timeout_seconds
 
-    def generate(self, config: dict[str, Any], prompt_start_time: str | None = None) -> ProviderForecast:
+    def generate(
+        self,
+        config: dict[str, Any],
+        prompt_start_time: str | None = None,
+        origin: pd.Timestamp | str | None = None,
+    ) -> ProviderForecast:
         interval_seconds = int(config["forecast"]["interval_seconds"])
         horizon_seconds = int(config["forecast"]["horizon_seconds"])
         expected_points = int(horizon_seconds / interval_seconds) + 1
@@ -40,6 +45,8 @@ class HttpForecastProvider:
             "num_paths": expected_paths,
             "generated_at": utc_now().isoformat(),
         }
+        if origin is not None:
+            payload["origin"] = _format_timestamp(origin)
         started = time.perf_counter()
         LOG.info("Requesting private forecast endpoint=%s asset=%s", self.endpoint, config["asset"])
         response = requests.post(self.endpoint, json=payload, timeout=self.timeout_seconds)
@@ -103,6 +110,15 @@ class HttpForecastProvider:
 def configured_endpoint(config: dict[str, Any]) -> str | None:
     endpoint = os.getenv("SYNTH_MODEL_ENDPOINT") or config.get("model", {}).get("endpoint")
     return str(endpoint).strip() if endpoint else None
+
+
+def _format_timestamp(value: pd.Timestamp | str) -> str:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.isoformat()
 
 
 def _timestamps_from_response(

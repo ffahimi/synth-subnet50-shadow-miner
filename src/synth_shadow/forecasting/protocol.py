@@ -23,6 +23,11 @@ class ProviderForecast:
 class ForecastProvider(Protocol):
     """Provider that returns Synth-compatible probabilistic price paths."""
 
-    def generate(self, config: dict[str, Any], prompt_start_time: str | None = None) -> ProviderForecast:
+    def generate(
+        self,
+        config: dict[str, Any],
+        prompt_start_time: str | None = None,
+        origin: pd.Timestamp | str | None = None,
+    ) -> ProviderForecast:
         """Generate a forecast for the configured asset."""
         ...

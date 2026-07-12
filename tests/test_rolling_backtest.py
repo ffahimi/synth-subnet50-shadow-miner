@@ -13,6 +13,7 @@ import requests
 from synth_shadow.assets import apply_asset
 from synth_shadow.backtest import rolling
 from synth_shadow.config import load_config
+from synth_shadow.forecasting.protocol import ProviderForecast
 from synth_shadow.models.protocol import ForecastContext, ForecastOutput
 
 
@@ -296,3 +297,114 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
             "result_config": result["config"],
         },
     )
+
+
+def test_rolling_backtest_uses_http_provider_when_endpoint_configured(monkeypatch, tmp_path):
+    origin = pd.Timestamp("2026-07-10T03:00:00Z")
+    interval_seconds = 300
+    horizon_seconds = 600
+    expected_points = 3
+    timestamps = pd.date_range(origin - pd.Timedelta(minutes=20), periods=8, freq="300s", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(99.0, 106.0, len(timestamps)),
+            "high": np.linspace(100.0, 107.0, len(timestamps)),
+            "low": np.linspace(98.0, 105.0, len(timestamps)),
+            "close": np.linspace(100.0, 107.0, len(timestamps)),
+            "volume": np.ones(len(timestamps)),
+        }
+    )
+    features = pd.DataFrame({"timestamp": timestamps})
+    provider_calls = []
+
+    config = {
+        "asset": "BTC",
+        "polygon_ticker": "X:BTCUSD",
+        "history": {"lookback_days": 1},
+        "forecast": {
+            "horizon_seconds": horizon_seconds,
+            "interval_seconds": interval_seconds,
+            "num_paths": 2,
+            "random_seed": 7,
+        },
+        "sampling": {"block_minutes": 60},
+        "model": {"endpoint": "http://127.0.0.1:8088/predict"},
+        "backtest": {
+            "days": 1,
+            "stride_minutes": 5,
+            "max_origins": 1,
+            "num_paths": 2,
+            "compare_miners": 4,
+        },
+        "storage": {"backtest_dir": str(tmp_path / "backtests")},
+    }
+
+    class FakeProvider:
+        def generate(self, run_config, prompt_start_time=None, origin=None):
+            provider_calls.append(
+                {
+                    "num_paths": run_config["forecast"]["num_paths"],
+                    "prompt_start_time": prompt_start_time,
+                    "origin": pd.Timestamp(origin),
+                }
+            )
+            paths = np.array([[104.0, 105.0, 106.0], [104.0, 103.0, 102.0]])
+            return ProviderForecast(
+                paths=paths,
+                timestamps=pd.date_range(origin, periods=expected_points, freq="300s", tz="UTC"),
+                metadata={
+                    "provider": "http",
+                    "model_version": "private_http_backtest_v1",
+                    "model_entrypoint": "http://127.0.0.1:8088/predict",
+                    "data_cutoff": str(origin),
+                    "current_price": 104.0,
+                },
+            )
+
+    def fail_load_forecast_model(_config):
+        raise AssertionError("HTTP backtest should not load the local in-process model.")
+
+    def fake_score(paths: np.ndarray, realized: np.ndarray):
+        assert paths.shape == (2, expected_points)
+        assert realized.tolist() == [104.0, 105.0, 106.0]
+        return {
+            "raw_crps": 2.0,
+            "components": {
+                "crps_5m": 0.1,
+                "crps_30m": 0.2,
+                "crps_3h": 0.3,
+                "crps_24h": 0.4,
+                "crps_path_price": 0.5,
+            },
+        }
+
+    monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: bars)
+    monkeypatch.setattr(rolling, "build_feature_frame", lambda _bars, _config: features)
+    monkeypatch.setattr(rolling, "_select_origins", lambda *_args: [origin])
+    monkeypatch.setattr(rolling, "load_forecast_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(rolling, "load_forecast_model", fail_load_forecast_model)
+    monkeypatch.setattr(rolling, "score_synth_btc_24h", fake_score)
+    monkeypatch.setattr(rolling, "_reference_miners", lambda _config: [])
+
+    result = rolling.run_rolling_backtest(
+        config,
+        days=1,
+        stride_minutes=5,
+        max_origins=1,
+        num_paths=2,
+    )
+
+    assert provider_calls == [
+        {
+            "num_paths": 2,
+            "prompt_start_time": "2026-07-10T03:00:00+00:00",
+            "origin": origin,
+        }
+    ]
+    assert result["summary"]["origin_count"] == 1
+    assert result["model"] == {
+        "model_version": "private_http_backtest_v1",
+        "model_entrypoint": "http://127.0.0.1:8088/predict",
+    }
+    assert result["first_rows"][0]["current_price"] == 104.0

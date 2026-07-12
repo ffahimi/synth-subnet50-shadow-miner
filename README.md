@@ -308,6 +308,7 @@ Request body:
   "asset": "BTC",
   "polygon_ticker": "X:BTCUSD",
   "prompt_start_time": "2026-07-12T16:29:00Z",
+  "origin": null,
   "horizon_seconds": 86400,
   "interval_seconds": 300,
   "num_paths": 1000,
@@ -321,6 +322,7 @@ Request field meanings:
 asset: Synth asset symbol, for example BTC
 polygon_ticker: public ticker mapping, for example X:BTCUSD
 prompt_start_time: latest synced Synth prompt start, nullable
+origin: historical forecast origin for backtests, nullable for live forecasts
 horizon_seconds: forecast horizon; currently 86400
 interval_seconds: output interval; currently 300
 num_paths: number of probabilistic paths requested; default 1000
@@ -663,6 +665,22 @@ The backtest is causal: for each forecast origin, it uses only Polygon bars at
 or before that origin to build features and the session-path library. It then
 generates a 24h forecast and scores it against the next 24h of realized Polygon
 closes.
+
+If `SYNTH_MODEL_ENDPOINT` or `model.endpoint` is set, `backtest-rolling` uses the
+HTTP inference node instead of the local in-process model. For each historical
+origin it sends:
+
+```json
+{
+  "prompt_start_time": "2026-07-10T03:00:00+00:00",
+  "origin": "2026-07-10T03:00:00+00:00"
+}
+```
+
+The private node is then responsible for fetching/vectorizing only data at or
+before `origin`. The public harness validates that the returned first timestamp
+equals `origin` and that `data_cutoff` is not after `origin`, then scores the
+paths against the realized future Polygon close path.
 
 Run a heavier test with 1000 paths per origin:
 

@@ -60,6 +60,7 @@ sleeps for `300` seconds.
   "asset": "BTC",
   "polygon_ticker": "X:BTCUSD",
   "prompt_start_time": "2026-07-12T16:29:00Z",
+  "origin": null,
   "horizon_seconds": 86400,
   "interval_seconds": 300,
   "num_paths": 1000,
@@ -69,6 +70,11 @@ sleeps for `300` seconds.
 
 The response returns `num_paths x 289` positive finite prices, with the first
 timestamp equal to `data_cutoff` and every path starting at `current_price`.
+
+For rolling backtests, the public harness sends `origin` as the historical
+forecast timestamp. The node should fetch and vectorize only data at or before
+that timestamp, return timestamps starting exactly at `origin`, and keep
+`data_cutoff <= origin`.
 
 ## Tests
 
