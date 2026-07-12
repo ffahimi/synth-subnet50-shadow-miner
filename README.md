@@ -40,6 +40,26 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
+Put your Polygon key in `.env`:
+
+```bash
+POLYGON_API_KEY=...
+```
+
+Run the first BTC pipeline:
+
+```bash
+synth-shadow generate-btc --debug
+```
+
+Outputs are written under:
+
+```text
+data/raw/          raw Polygon 5-minute bars
+data/processed/    repaired bars with sessions and features
+data/forecasts/    paths.npz, timestamps.csv, metadata.json, features.json
+```
+
 ## First Target
 
 ```text

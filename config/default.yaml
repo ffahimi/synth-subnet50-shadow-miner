@@ -1,5 +1,6 @@
 asset: BTC
 polygon_ticker: X:BTCUSD
+debug: true
 
 forecast:
   horizon_seconds: 86400
@@ -11,6 +12,8 @@ history:
   lookback_days: 14
   bar_multiplier: 5
   bar_timespan: minute
+  adjusted: true
+  repair_missing_bars: true
 
 features:
   short_window_bars: 12
@@ -32,3 +35,22 @@ sessions:
   outside_market_hours:
     start: "21:00"
     end: "07:00"
+
+sampling:
+  block_minutes: 60
+  nearest_neighbours: 30
+  bootstrap_with_replacement: true
+
+normalization:
+  volatility_scale_min: 0.40
+  volatility_scale_max: 2.50
+  momentum_adjustment_max_bps: 50
+  kurtosis_scale_min: 0.70
+  kurtosis_scale_max: 1.80
+
+storage:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  forecast_dir: data/forecasts
+  raw_format: csv
+  processed_format: csv
