@@ -18,7 +18,7 @@ import pandas as pd
 
 
 def add_session_labels(df: pd.DataFrame, config: dict) -> pd.DataFrame:
-    """Add a `session` column to canonical BTC bars."""
+    """Add a `session` column to canonical bars."""
     sessions = config["sessions"]
     out = df.copy()
     timestamps = out["timestamp"].dt.tz_convert(sessions.get("timezone", "UTC"))

@@ -1,4 +1,4 @@
-"""Polygon BTC bar fetcher.
+"""Polygon aggregate bar fetcher.
 
 This is the only live market-data adapter in the first prototype. Later, this
 module can be replaced by a database-backed Polygon mirror while preserving the
@@ -90,8 +90,8 @@ class PolygonClient:
         LOG.debug("Polygon fetch returned %s bars after timestamp filtering.", len(df))
         return df.reset_index(drop=True)
 
-    def fetch_recent_btc(self, config: dict) -> pd.DataFrame:
-        """Fetch recent BTC bars using the project config."""
+    def fetch_recent(self, config: dict) -> pd.DataFrame:
+        """Fetch recent bars using the active asset config."""
         now = pd.Timestamp(utc_now())
         lookback_days = int(config["history"]["lookback_days"])
         return self.fetch_aggregates(
@@ -102,6 +102,10 @@ class PolygonClient:
             end=now,
             adjusted=bool(config["history"].get("adjusted", True)),
         )
+
+    def fetch_recent_btc(self, config: dict) -> pd.DataFrame:
+        """Backward-compatible alias for the original BTC-only pipeline."""
+        return self.fetch_recent(config)
 
     @staticmethod
     def _without_key(url: str) -> str:

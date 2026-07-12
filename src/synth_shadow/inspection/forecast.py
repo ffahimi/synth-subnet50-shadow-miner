@@ -19,11 +19,11 @@ LOG = logging.getLogger(__name__)
 def inspect_forecast(config: dict, forecast_dir: str | None = None) -> dict[str, Any]:
     """Load a forecast directory and return aggregate path diagnostics."""
     if forecast_dir is None:
-        latest = ForecastRegistry(config["storage"]["registry_path"]).latest_forecast()
+        latest = ForecastRegistry(config["storage"]["registry_path"]).latest_forecast(config["asset"])
         if latest:
             forecast_dir = latest["forecast_dir"]
         else:
-            dirs = sorted(Path(config["storage"]["forecast_dir"]).glob("BTC/*"))
+            dirs = sorted(Path(config["storage"]["forecast_dir"]).glob(f"{config['asset']}/*"))
             if not dirs:
                 raise FileNotFoundError("No forecast runs found.")
             forecast_dir = str(dirs[-1])

@@ -1,9 +1,10 @@
 # Synth Subnet 50 Shadow Miner
 
 Shadow forecasting and scoring prototype for Synth subnet 50. The current
-version is Polygon-first and BTC-only: it builds 24-hour probabilistic BTC paths
-at 5-minute resolution, stores the forecast artifacts, syncs public Synth
-validation context, and can run a rolling historical backtest.
+version is Polygon-first and supports `BTC`, `ETH`, and `XAU`: it builds
+24-hour probabilistic paths at 5-minute resolution, stores the forecast
+artifacts, syncs public Synth validation context, and can run a rolling
+historical backtest.
 
 Live Bittensor miner integration is intentionally not part of this first layer.
 The goal is to test whether the forecast distribution is competitive before
@@ -12,9 +13,9 @@ wrapping it in a live miner.
 ## What Works Now
 
 ```text
-Polygon BTC 5-minute REST data fetch
+Polygon 5-minute REST data fetch for BTC, ETH, XAU
 canonical OHLCV repair/checks
-BTC liquidity session labels
+liquidity session labels
 1h/4h volatility, vol-of-vol, vol slope, momentum, kurtosis
 historical normalized session-path library
 1000 x 289 BTC 24h path generation
@@ -26,11 +27,17 @@ SQLite local forecast registry
 rolling historical Polygon backtest
 ```
 
-The main forecast target is:
+Supported assets:
 
 ```text
-asset: BTC
-ticker: X:BTCUSD
+BTC -> Polygon X:BTCUSD -> Synth BTC -> crypto-24h
+ETH -> Polygon X:ETHUSD -> Synth ETH -> crypto-24h
+XAU -> Polygon C:XAUUSD -> Synth XAU -> com-equ-24h
+```
+
+The main forecast target per asset is:
+
+```text
 forecast horizon: 24h
 interval: 5 minutes
 paths: 1000
@@ -84,16 +91,44 @@ For development tools:
 pip install -e ".[dev]"
 ```
 
+## Select An Asset
+
+All commands default to `BTC`. Use `--asset` to run another supported asset:
+
+```bash
+--asset BTC
+--asset ETH
+--asset XAU
+```
+
 ## Generate A New Forecast
 
-Run a standalone Polygon BTC forecast:
+Run a standalone Polygon forecast:
 
 ```bash
 synth-shadow generate-btc --debug
 ```
 
-This fetches recent Polygon BTC bars, extracts features, builds the session
-library, generates `1000 x 289` paths, saves files under `data/forecasts/BTC/`,
+Equivalent generic command:
+
+```bash
+synth-shadow generate-forecast --asset BTC --debug
+```
+
+ETH:
+
+```bash
+synth-shadow generate-forecast --asset ETH --debug
+```
+
+XAU:
+
+```bash
+synth-shadow generate-forecast --asset XAU --debug
+```
+
+This fetches recent Polygon bars for the selected asset, extracts features, builds the session
+library, generates `1000 x 289` paths, saves files under `data/forecasts/<ASSET>/`,
 and registers the run in `data/registry.sqlite3`.
 
 Inspect the latest forecast:
@@ -115,7 +150,7 @@ You can also inspect a specific forecast directory:
 
 ```bash
 synth-shadow inspect-latest \
-  --forecast-dir data/forecasts/BTC/<forecast_timestamp> \
+  --forecast-dir data/forecasts/<ASSET>/<forecast_timestamp> \
   --debug
 ```
 
@@ -131,7 +166,7 @@ This does:
 
 ```text
 1. sync Synth BTC prompts
-2. generate a Polygon BTC forecast tagged to the latest prompt
+2. generate a Polygon forecast tagged to the latest prompt
 3. inspect generated path percentiles
 4. try to score any matured pending forecasts
 5. fetch latest Synth BTC miner scores
@@ -147,9 +182,9 @@ Useful individual commands:
 
 ```bash
 synth-shadow sync-prompts --debug
-synth-shadow generate-latest-prompt --debug
+synth-shadow generate-latest-prompt --asset ETH --debug
 synth-shadow score-matured --debug
-synth-shadow benchmarks --debug
+synth-shadow benchmarks --asset XAU --debug
 ```
 
 ## CRPS And Reward Benchmarks
@@ -193,6 +228,18 @@ Run a quick smoke test:
 
 ```bash
 synth-shadow backtest-rolling --debug --backtest-max-origins 12
+```
+
+Backtest ETH:
+
+```bash
+synth-shadow backtest-rolling --asset ETH --debug --backtest-max-origins 12
+```
+
+Backtest XAU:
+
+```bash
+synth-shadow backtest-rolling --asset XAU --debug --backtest-max-origins 12
 ```
 
 Run the full default backtest:
@@ -261,7 +308,7 @@ current Synth miners by CRPS, with reward context attached.
 
 ```text
 data/raw/
-  raw Polygon 5-minute BTC bars
+  raw Polygon 5-minute bars
 
 data/processed/
   repaired bars with sessions and features
@@ -272,12 +319,19 @@ data/forecasts/BTC/<timestamp>/
   metadata.json
   features.json
 
+data/forecasts/ETH/<timestamp>/
+data/forecasts/XAU/<timestamp>/
+
 data/reports/
   latest_forecast_summary.json
 
 data/backtests/<timestamp>/
   rolling_results.csv
   summary.json
+
+data/backtests/BTC/<timestamp>/
+data/backtests/ETH/<timestamp>/
+data/backtests/XAU/<timestamp>/
 
 data/realized/
   Synth realized paths once matured forecasts can be scored
@@ -299,6 +353,7 @@ config/default.yaml
 Important sections:
 
 ```text
+assets         Polygon ticker, Synth asset, competition mapping
 forecast       horizon, interval, number of paths
 history        Polygon lookback and bar size
 features       1h/4h rolling windows
@@ -315,7 +370,8 @@ inspection     checkpoint and sample-path settings
 
 - Polygon API keys belong in `.env`, not Git.
 - The current model is a baseline session-resampled volatility projection.
+- XAU uses Polygon `C:XAUUSD`; unlike crypto, it has market closures/gaps.
 - Synth scoring here is a shadow approximation using documented CRPS scales.
-- BTC-only testing does not estimate full crypto-24h emissions by itself.
+- Single-asset testing does not estimate full competition emissions by itself.
 - A fresh forecast must wait for the 24h realized path before official-like
   Synth realized-path scoring is available.

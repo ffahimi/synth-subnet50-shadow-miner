@@ -2,6 +2,20 @@ asset: BTC
 polygon_ticker: X:BTCUSD
 debug: true
 
+assets:
+  BTC:
+    polygon_ticker: X:BTCUSD
+    synth_asset: BTC
+    competition: crypto-24h
+  ETH:
+    polygon_ticker: X:ETHUSD
+    synth_asset: ETH
+    competition: crypto-24h
+  XAU:
+    polygon_ticker: C:XAUUSD
+    synth_asset: XAU
+    competition: com-equ-24h
+
 forecast:
   horizon_seconds: 86400
   interval_seconds: 300

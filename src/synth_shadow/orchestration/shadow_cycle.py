@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from synth_shadow.inspection.forecast import inspect_forecast
-from synth_shadow.models.btc_generator import run_btc_forecast
+from synth_shadow.models.btc_generator import run_asset_forecast
 from synth_shadow.scoring.evaluator import score_matured_forecasts
 from synth_shadow.scoring.benchmarks import join_scores_to_leaderboard
 from synth_shadow.storage.registry import ForecastRegistry
@@ -26,12 +26,12 @@ def sync_prompts(config: dict) -> dict[str, Any]:
         "earliest_prompt": prompts[0] if prompts else None,
         "latest_prompt": prompts[-1] if prompts else None,
     }
-    LOG.info("Synced Synth prompts: %s", result)
+    LOG.info("Synced Synth %s prompts: %s", config["asset"], result)
     return result
 
 
 def generate_for_latest_prompt(config: dict) -> dict[str, Any]:
-    """Generate a Polygon BTC forecast tagged to the latest known Synth prompt."""
+    """Generate a Polygon forecast tagged to the latest known Synth prompt."""
     registry = ForecastRegistry(config["storage"]["registry_path"])
     prompts = registry.list_prompts()
     prompt_start = prompts[0]["start_time"] if prompts else None
@@ -39,7 +39,7 @@ def generate_for_latest_prompt(config: dict) -> dict[str, Any]:
         LOG.warning("No synced prompt available; generating unaligned forecast.")
     else:
         LOG.info("Generating forecast for latest synced prompt_start_time=%s", prompt_start)
-    return run_btc_forecast(config, prompt_start_time=prompt_start)
+    return run_asset_forecast(config, prompt_start_time=prompt_start)
 
 
 def fetch_benchmarks(config: dict) -> dict[str, Any]:

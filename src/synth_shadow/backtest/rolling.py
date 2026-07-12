@@ -53,7 +53,8 @@ def run_rolling_backtest(
     run_config["forecast"]["num_paths"] = num_paths
 
     LOG.info(
-        "Starting rolling backtest days=%s stride_minutes=%s max_origins=%s num_paths=%s",
+        "Starting %s rolling backtest days=%s stride_minutes=%s max_origins=%s num_paths=%s",
+        config["asset"],
         days,
         stride_minutes,
         max_origins,
@@ -65,7 +66,8 @@ def run_rolling_backtest(
     features = build_feature_frame(bars, run_config)
     origins = _select_origins(features, run_config, days, stride_minutes, max_origins)
     LOG.info(
-        "Backtest data ready bars=%s features=%s origins=%s first_origin=%s last_origin=%s",
+        "%s backtest data ready bars=%s features=%s origins=%s first_origin=%s last_origin=%s",
+        config["asset"],
         len(bars),
         len(features),
         len(origins),
@@ -195,6 +197,7 @@ def _summarize_backtest(rows: list[dict[str, Any]], config: dict) -> dict[str, A
     }
     return {
         "summary": summary,
+        "asset": config["asset"],
         "first_rows": rows[:3],
         "last_rows": rows[-3:],
         "config": {
@@ -221,7 +224,9 @@ def _reference_miners(config: dict) -> list[dict[str, Any]]:
 
 
 def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:
-    output_dir = ensure_dir(Path(config["storage"]["backtest_dir"]) / safe_timestamp(utc_now()))
+    output_dir = ensure_dir(
+        Path(config["storage"]["backtest_dir"]) / config["asset"] / safe_timestamp(utc_now())
+    )
     pd.DataFrame(rows).to_csv(output_dir / "rolling_results.csv", index=False)
     (output_dir / "summary.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     LOG.info("Saved backtest outputs to %s", output_dir)

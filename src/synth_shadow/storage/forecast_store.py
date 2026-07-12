@@ -24,7 +24,8 @@ LOG = logging.getLogger(__name__)
 
 def save_raw_bars(bars: pd.DataFrame, config: dict) -> Path:
     raw_dir = ensure_dir(config["storage"]["raw_dir"])
-    filename = f"polygon_btc_5m_{safe_timestamp(bars['timestamp'].min())}_{safe_timestamp(bars['timestamp'].max())}.csv"
+    asset = config["asset"].lower()
+    filename = f"polygon_{asset}_5m_{safe_timestamp(bars['timestamp'].min())}_{safe_timestamp(bars['timestamp'].max())}.csv"
     path = raw_dir / filename
     bars.to_csv(path, index=False)
     LOG.debug("Saved raw bars to %s", path)
@@ -33,7 +34,8 @@ def save_raw_bars(bars: pd.DataFrame, config: dict) -> Path:
 
 def save_processed_features(features: pd.DataFrame, config: dict) -> Path:
     processed_dir = ensure_dir(config["storage"]["processed_dir"])
-    filename = f"btc_features_{safe_timestamp(features['timestamp'].min())}_{safe_timestamp(features['timestamp'].max())}.csv"
+    asset = config["asset"].lower()
+    filename = f"{asset}_features_{safe_timestamp(features['timestamp'].min())}_{safe_timestamp(features['timestamp'].max())}.csv"
     path = processed_dir / filename
     features.to_csv(path, index=False)
     LOG.debug("Saved processed features to %s", path)
@@ -47,7 +49,11 @@ def save_forecast_run(
     feature_snapshot: dict[str, Any],
     config: dict,
 ) -> Path:
-    forecast_dir = ensure_dir(Path(config["storage"]["forecast_dir"]) / "BTC" / safe_timestamp(metadata["generated_at"]))
+    forecast_dir = ensure_dir(
+        Path(config["storage"]["forecast_dir"])
+        / str(metadata["asset"]).upper()
+        / safe_timestamp(metadata["generated_at"])
+    )
     np.savez_compressed(forecast_dir / "paths.npz", paths=paths)
     pd.DataFrame({"timestamp": timestamps}).to_csv(forecast_dir / "timestamps.csv", index=False)
     _write_json(forecast_dir / "metadata.json", metadata)

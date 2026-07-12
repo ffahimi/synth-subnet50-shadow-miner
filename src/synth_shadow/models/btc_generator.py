@@ -1,8 +1,8 @@
-"""BTC 24h generator.
+"""Asset 24h generator.
 
 Generation plan:
 
-1. Read the latest canonical Polygon BTC bars.
+1. Read the latest canonical Polygon bars.
 2. Compute 1h and 4h regime features.
 3. Build future 5-minute timestamps for the next 24h.
 4. Assign each future timestamp to a liquidity session.
@@ -35,11 +35,11 @@ from synth_shadow.utils.time import utc_now
 LOG = logging.getLogger(__name__)
 
 
-def run_btc_forecast(config: dict, prompt_start_time: str | None = None) -> dict:
-    """Fetch Polygon BTC data, extract features, generate paths, and save artifacts."""
-    LOG.info("Starting Polygon BTC shadow forecast pipeline.")
+def run_asset_forecast(config: dict, prompt_start_time: str | None = None) -> dict:
+    """Fetch Polygon data, extract features, generate paths, and save artifacts."""
+    LOG.info("Starting Polygon %s shadow forecast pipeline.", config["asset"])
     client = PolygonClient()
-    raw_bars = client.fetch_recent_btc(config)
+    raw_bars = client.fetch_recent(config)
     save_raw_bars(raw_bars, config)
 
     interval_seconds = int(config["forecast"]["interval_seconds"])
@@ -75,5 +75,10 @@ def run_btc_forecast(config: dict, prompt_start_time: str | None = None) -> dict
     forecast_dir = save_forecast_run(paths, timestamps, metadata, state.to_dict(), config)
     registry = ForecastRegistry(config["storage"]["registry_path"])
     registry.register_forecast(str(forecast_dir), metadata)
-    LOG.info("Completed BTC forecast: %s", metadata)
+    LOG.info("Completed %s forecast: %s", config["asset"], metadata)
     return {"forecast_dir": str(forecast_dir), "metadata": metadata}
+
+
+def run_btc_forecast(config: dict, prompt_start_time: str | None = None) -> dict:
+    """Backward-compatible alias for existing BTC command paths."""
+    return run_asset_forecast(config, prompt_start_time=prompt_start_time)

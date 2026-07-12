@@ -95,22 +95,32 @@ class ForecastRegistry:
                 (status, forecast_dir),
             )
 
-    def list_forecasts(self, status: str | None = None) -> list[dict[str, Any]]:
+    def list_forecasts(self, status: str | None = None, asset: str | None = None) -> list[dict[str, Any]]:
         query = "select * from forecasts"
-        params: tuple[Any, ...] = ()
+        clauses = []
+        params: list[Any] = []
         if status:
-            query += " where status=?"
-            params = (status,)
+            clauses.append("status=?")
+            params.append(status)
+        if asset:
+            clauses.append("asset=?")
+            params.append(asset.upper())
+        if clauses:
+            query += " where " + " and ".join(clauses)
         query += " order by generated_at desc"
         with self._connect() as conn:
-            rows = conn.execute(query, params).fetchall()
+            rows = conn.execute(query, tuple(params)).fetchall()
         return [dict(row) for row in rows]
 
-    def latest_forecast(self) -> dict[str, Any] | None:
+    def latest_forecast(self, asset: str | None = None) -> dict[str, Any] | None:
+        query = "select * from forecasts"
+        params: tuple[Any, ...] = ()
+        if asset:
+            query += " where asset=?"
+            params = (asset.upper(),)
+        query += " order by generated_at desc limit 1"
         with self._connect() as conn:
-            row = conn.execute(
-                "select * from forecasts order by generated_at desc limit 1"
-            ).fetchone()
+            row = conn.execute(query, params).fetchone()
         return dict(row) if row else None
 
     def register_score(

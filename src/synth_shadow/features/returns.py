@@ -1,4 +1,4 @@
-"""Return calculations for 5-minute BTC bars."""
+"""Return calculations for 5-minute bars."""
 
 from __future__ import annotations
 

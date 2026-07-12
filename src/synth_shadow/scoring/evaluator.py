@@ -59,7 +59,7 @@ def score_matured_forecasts(config: dict) -> list[dict[str, Any]]:
     """Try to score every pending forecast; skip ones whose realized path is not ready."""
     registry = ForecastRegistry(config["storage"]["registry_path"])
     results = []
-    for row in registry.list_forecasts(status="pending"):
+    for row in registry.list_forecasts(status="pending", asset=config["asset"]):
         forecast_dir = row["forecast_dir"]
         try:
             results.append(score_forecast_dir(config, forecast_dir))

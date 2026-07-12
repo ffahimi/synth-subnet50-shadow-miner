@@ -47,7 +47,7 @@ def polygon_results_to_bars(results: list[dict]) -> pd.DataFrame:
 
 
 def repair_missing_bars(df: pd.DataFrame, interval_seconds: int) -> pd.DataFrame:
-    """Repair missing 5-minute BTC bars with conservative forward-filled prices."""
+    """Repair missing bars with conservative forward-filled prices."""
     if df.empty:
         raise ValueError("Cannot repair an empty bar dataframe.")
 
