@@ -16,9 +16,10 @@ from synth_shadow.data.polygon_client import PolygonClient
 from synth_shadow.data.schema import repair_missing_bars
 from synth_shadow.features.pipeline import build_feature_frame
 from synth_shadow.models.current_state import extract_current_state
+from synth_shadow.models.loader import configured_model_entrypoint, load_forecast_model
 from synth_shadow.models.path_sampler import PathSampler
+from synth_shadow.models.protocol import ForecastContext
 from synth_shadow.models.session_path_model import build_session_library
-from synth_shadow.paths.generator import generate_paths
 from synth_shadow.scoring.benchmarks import select_reference_miners
 from synth_shadow.scoring.crps import score_synth_btc_24h
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
@@ -82,8 +83,12 @@ def run_rolling_backtest(
     block_bars = int(run_config["sampling"]["block_minutes"] * 60 / interval_seconds)
     horizon_steps = int(run_config["forecast"]["horizon_seconds"] / interval_seconds)
     points_per_path = horizon_steps + 1
+    model = load_forecast_model(run_config)
+    model_version = str(getattr(model, "model_version", model.__class__.__name__))
+    model_entrypoint = configured_model_entrypoint(run_config)
 
     for idx, origin in enumerate(origins, start=1):
+        past_bars = bars[bars["timestamp"] <= origin].copy()
         past_features = features[features["timestamp"] <= origin].copy()
         future = bars[(bars["timestamp"] >= origin)].head(points_per_path)
         if len(future) != points_per_path:
@@ -93,7 +98,18 @@ def run_rolling_backtest(
             library = build_session_library(past_features, block_bars)
             state = extract_current_state(past_features)
             sampler = PathSampler(library, seed=int(run_config["forecast"]["random_seed"]) + idx)
-            paths, _ = generate_paths(state, sampler, run_config)
+            output = model.generate(
+                ForecastContext(
+                    config=run_config,
+                    bars=past_bars,
+                    features=past_features,
+                    library=library,
+                    state=state,
+                    sampler=sampler,
+                    origin=origin,
+                )
+            )
+            paths = output.paths
             realized = future["close"].to_numpy(dtype=float)
             score = score_synth_btc_24h(paths, realized)
             row = {
@@ -114,6 +130,10 @@ def run_rolling_backtest(
         raise RuntimeError("Backtest produced no scored origins.")
 
     result = _summarize_backtest(rows, run_config)
+    result["model"] = {
+        "model_version": model_version,
+        "model_entrypoint": model_entrypoint,
+    }
     result["reference_miners"] = _reference_miners(run_config)
     result["miner_0_3_crps"] = [
         {

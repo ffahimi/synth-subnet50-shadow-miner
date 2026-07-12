@@ -23,6 +23,9 @@ forecast:
   random_seed: 42
   points_per_path: 289
 
+model:
+  entrypoint: synth_shadow.models.baseline:SessionPathBaselineModel
+
 synth:
   base_url: https://api.synthdata.co
   asset: BTC

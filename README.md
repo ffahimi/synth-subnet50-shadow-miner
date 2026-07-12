@@ -18,6 +18,7 @@ canonical OHLCV repair/checks
 liquidity session labels
 1h/4h volatility, vol-of-vol, vol slope, momentum, kurtosis
 historical normalized session-path library
+public forecast model interface with private model entrypoint support
 1000 x 289 BTC 24h path generation
 forecast inspection and percentile summaries
 Synth prompt sync
@@ -52,7 +53,7 @@ src/synth_shadow/
   data/            Polygon adapter and canonical bar schema
   features/        returns, volatility, momentum, kurtosis, feature pipeline
   sessions/        EU, EU-US, US, outside-hours, weekend classifiers
-  models/          current state, session library, and path sampler
+  models/          model interface, loader, public baseline, state/sampler tools
   paths/           path generation and validation
   inspection/      forecast summaries and sample path reports
   synth/           public Synth API client
@@ -83,6 +84,8 @@ cat > .env <<'EOF'
 POLYGON_API_KEY=your_polygon_key_here
 SYNTH_SHADOW_CONFIG=config/default.yaml
 LOG_LEVEL=DEBUG
+# Optional: override public baseline with an installed private model package.
+# SYNTH_MODEL_ENTRYPOINT=private_synth_models.eth_v1:Model
 EOF
 ```
 
@@ -131,6 +134,105 @@ synth-shadow generate-forecast --asset XAU --debug
 This fetches recent Polygon bars for the selected asset, extracts features, builds the session
 library, generates `1000 x 289` paths, saves files under `data/forecasts/<ASSET>/`,
 and registers the run in `data/registry.sqlite3`.
+
+## Public Repo / Private Model Split
+
+This repository is designed to be safe as a public harness. Keep data adapters,
+feature extraction, scoring, backtests, storage, and orchestration here. Keep
+forecast edge, experiments, and model-specific parameters in a separate private
+repo.
+
+The public baseline model is configured in `config/default.yaml`:
+
+```yaml
+model:
+  entrypoint: synth_shadow.models.baseline:SessionPathBaselineModel
+```
+
+To use a private model, install the private repo into the same virtualenv and
+point the harness at its import path:
+
+```bash
+cd ~
+git clone git@github.com:ffahimi/synth-subnet50-models-private.git
+cd synth-subnet50-models-private
+../synth-subnet50-shadow-miner/.venv/bin/python -m pip install -e .
+
+cd ../synth-subnet50-shadow-miner
+export SYNTH_MODEL_ENTRYPOINT=private_synth_models.eth_v1:Model
+export POLYGON_API_KEY=your_polygon_key_here
+export SYNTH_SHADOW_CONFIG=config/default.yaml
+export LOG_LEVEL=DEBUG
+```
+
+Then run the normal public commands:
+
+```bash
+.venv/bin/python -m synth_shadow.cli generate-forecast --asset ETH --debug
+.venv/bin/python -m synth_shadow.cli backtest-rolling \
+  --asset ETH \
+  --debug \
+  --backtest-days 2 \
+  --backtest-stride-minutes 60 \
+  --backtest-num-paths 250
+```
+
+The forecast metadata and backtest summary include:
+
+```text
+model_version
+model_entrypoint
+```
+
+Private model contract:
+
+```python
+from synth_shadow.models.protocol import ForecastContext, ForecastOutput
+
+
+class Model:
+    model_version = "eth_private_v1"
+
+    def generate(self, context: ForecastContext) -> ForecastOutput:
+        # Causal inputs only:
+        # context.bars      -> bars up to the live cutoff/backtest origin
+        # context.features  -> features up to the live cutoff/backtest origin
+        # context.library   -> public session-path library built from past data
+        # context.state     -> current state at the cutoff/origin
+        # context.sampler   -> public sampler seeded by the harness
+        # context.config    -> runtime config
+        # context.origin    -> backtest origin, or None for latest live forecast
+        paths, timestamps = your_private_generation_logic(context)
+        return ForecastOutput(
+            paths=paths,
+            timestamps=timestamps,
+            metadata={"notes": "private diagnostics are optional"},
+        )
+```
+
+Expected output shape remains:
+
+```text
+paths: num_paths x 289
+timestamps: 289 UTC timestamps at 5-minute resolution
+```
+
+In rolling backtests, the public harness passes only `bars` and `features` whose
+timestamps are `<= origin` into the private model context. The realized future
+path is kept outside the model and is only sent to the scorer.
+
+Before making this repo public, keep these out of git:
+
+```gitignore
+.env
+private_models/
+models_private/
+local_models/
+*.secret.yaml
+```
+
+Do not commit private model packages as subdirectories of this repo. Install
+them into the virtualenv as separate private packages instead.
 
 Inspect the latest forecast:
 

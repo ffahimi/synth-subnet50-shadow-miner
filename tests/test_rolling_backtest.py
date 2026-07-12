@@ -12,6 +12,7 @@ import pytest
 from synth_shadow.assets import apply_asset
 from synth_shadow.backtest import rolling
 from synth_shadow.config import load_config
+from synth_shadow.models.protocol import ForecastContext, ForecastOutput
 
 
 def _print_report(title: str, values: dict[str, object]) -> None:
@@ -43,6 +44,8 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         "feature_rows_seen": None,
         "library_rows_per_origin": [],
         "library_max_timestamps": [],
+        "model_bar_max_timestamps": [],
+        "model_feature_max_timestamps": [],
         "state_timestamps": [],
         "state_prices": [],
         "forecast_shapes": [],
@@ -148,11 +151,32 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
             self.library = library
             self.seed = seed
 
-    def audited_generate_paths(state, _sampler, patched_config):
-        shape = (int(patched_config["forecast"]["num_paths"]), expected_points)
-        audit["forecast_shapes"].append(shape)
-        paths = np.full(shape, float(state.price))
-        return paths, {"state_timestamp": state.timestamp}
+    class AuditedForecastModel:
+        model_version = "test_private_model_audit"
+
+        def generate(self, context: ForecastContext) -> ForecastOutput:
+            origin = pd.Timestamp(context.origin)
+            assert context.bars["timestamp"].max() == origin
+            assert context.features["timestamp"].max() == origin
+            assert pd.Timestamp(context.state.timestamp) == origin
+            audit["model_bar_max_timestamps"].append(pd.Timestamp(context.bars["timestamp"].max()))
+            audit["model_feature_max_timestamps"].append(
+                pd.Timestamp(context.features["timestamp"].max())
+            )
+            shape = (int(context.config["forecast"]["num_paths"]), expected_points)
+            audit["forecast_shapes"].append(shape)
+            paths = np.full(shape, float(context.state.price))
+            timestamps = pd.date_range(
+                origin,
+                periods=expected_points,
+                freq=expected_interval,
+                tz="UTC",
+            )
+            return ForecastOutput(
+                paths=paths,
+                timestamps=timestamps,
+                metadata={"audit": "private-model-shaped test model"},
+            )
 
     def audited_score(paths: np.ndarray, realized: np.ndarray):
         audit["realized_lengths"].append(len(realized))
@@ -175,7 +199,12 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
     monkeypatch.setattr(rolling, "build_session_library", audited_build_session_library)
     monkeypatch.setattr(rolling, "extract_current_state", audited_extract_current_state)
     monkeypatch.setattr(rolling, "PathSampler", AuditedPathSampler)
-    monkeypatch.setattr(rolling, "generate_paths", audited_generate_paths)
+    monkeypatch.setattr(rolling, "load_forecast_model", lambda _config: AuditedForecastModel())
+    monkeypatch.setattr(
+        rolling,
+        "configured_model_entrypoint",
+        lambda _config: "tests.test_rolling_backtest:AuditedForecastModel",
+    )
     monkeypatch.setattr(rolling, "score_synth_btc_24h", audited_score)
 
     result = rolling.run_rolling_backtest(
@@ -194,13 +223,17 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         for earlier, later in zip(scored_origins, scored_origins[1:])
     )
 
-    for origin, library_max, state_price, realized_first in zip(
+    for origin, library_max, model_bar_max, model_feature_max, state_price, realized_first in zip(
         scored_origins,
         audit["library_max_timestamps"],
+        audit["model_bar_max_timestamps"],
+        audit["model_feature_max_timestamps"],
         audit["state_prices"],
         audit["realized_first_prices"],
     ):
         assert library_max == origin
+        assert model_bar_max == origin
+        assert model_feature_max == origin
         assert realized_first == state_price
 
     assert all(shape == (num_paths, expected_points) for shape in audit["forecast_shapes"])
@@ -232,6 +265,9 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         "passed audit checks",
         {
             "past_only_check": "PASSED: each library/state max timestamp equals its origin",
+            "model_context_causality": (
+                "PASSED: private-model context receives only bars/features <= origin"
+            ),
             "source_resolution_check": f"PASSED: all source/feature bars are {interval_seconds}s apart",
             "origin_stride_check": f"PASSED: {origins_to_score} origins are {stride_minutes} minutes apart",
             "forecast_shape_check": f"PASSED: every forecast is {num_paths} x {expected_points}",
@@ -240,8 +276,13 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
             "scored_origin_count": len(scored_origins),
             "scored_origins": [str(origin) for origin in scored_origins],
             "library_rows_per_origin": audit["library_rows_per_origin"],
+            "model_bar_max_timestamps": [str(ts) for ts in audit["model_bar_max_timestamps"]],
+            "model_feature_max_timestamps": [
+                str(ts) for ts in audit["model_feature_max_timestamps"]
+            ],
             "forecast_shapes": audit["forecast_shapes"],
             "origin_details": origin_details,
+            "model": result["model"],
             "result_config": result["config"],
         },
     )

@@ -20,9 +20,10 @@ from synth_shadow.data.polygon_client import PolygonClient
 from synth_shadow.data.schema import repair_missing_bars
 from synth_shadow.features.pipeline import build_feature_frame
 from synth_shadow.models.current_state import extract_current_state
+from synth_shadow.models.loader import configured_model_entrypoint, load_forecast_model
 from synth_shadow.models.path_sampler import PathSampler
+from synth_shadow.models.protocol import ForecastContext
 from synth_shadow.models.session_path_model import build_session_library
-from synth_shadow.paths.generator import generate_paths
 from synth_shadow.paths.validator import validate_paths
 from synth_shadow.storage.forecast_store import (
     save_forecast_run,
@@ -51,7 +52,20 @@ def run_asset_forecast(config: dict, prompt_start_time: str | None = None) -> di
     library = build_session_library(features, block_bars)
     state = extract_current_state(features)
     sampler = PathSampler(library, seed=int(config["forecast"]["random_seed"]))
-    paths, timestamps = generate_paths(state, sampler, config)
+    model = load_forecast_model(config)
+    model_entrypoint = configured_model_entrypoint(config)
+    output = model.generate(
+        ForecastContext(
+            config=config,
+            bars=bars,
+            features=features,
+            library=library,
+            state=state,
+            sampler=sampler,
+        )
+    )
+    paths = output.paths
+    timestamps = output.timestamps
     validate_paths(
         paths,
         num_paths=int(config["forecast"]["num_paths"]),
@@ -59,7 +73,8 @@ def run_asset_forecast(config: dict, prompt_start_time: str | None = None) -> di
     )
 
     metadata = {
-        "model_version": "session_path_v0",
+        "model_version": str(getattr(model, "model_version", model.__class__.__name__)),
+        "model_entrypoint": model_entrypoint,
         "asset": config["asset"],
         "polygon_ticker": config["polygon_ticker"],
         "generated_at": utc_now().isoformat(),
@@ -71,6 +86,7 @@ def run_asset_forecast(config: dict, prompt_start_time: str | None = None) -> di
         "path_shape": list(paths.shape),
         "current_price": state.price,
         "debug": bool(config.get("debug", False)),
+        "model_metadata": output.metadata,
     }
     forecast_dir = save_forecast_run(paths, timestamps, metadata, state.to_dict(), config)
     registry = ForecastRegistry(config["storage"]["registry_path"])
