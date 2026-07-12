@@ -16,83 +16,40 @@ from __future__ import annotations
 
 import logging
 
-from synth_shadow.data.polygon_client import PolygonClient
-from synth_shadow.data.schema import repair_missing_bars
-from synth_shadow.features.pipeline import build_feature_frame
-from synth_shadow.models.current_state import extract_current_state
-from synth_shadow.models.loader import configured_model_entrypoint, load_forecast_model
-from synth_shadow.models.path_sampler import PathSampler
-from synth_shadow.models.protocol import ForecastContext
-from synth_shadow.models.session_path_model import build_session_library
+from synth_shadow.forecasting.loader import load_forecast_provider
 from synth_shadow.paths.validator import validate_paths
 from synth_shadow.storage.forecast_store import (
     save_forecast_run,
-    save_processed_features,
-    save_raw_bars,
 )
 from synth_shadow.storage.registry import ForecastRegistry
-from synth_shadow.utils.time import utc_now
 
 LOG = logging.getLogger(__name__)
 
 
 def run_asset_forecast(config: dict, prompt_start_time: str | None = None) -> dict:
     """Fetch Polygon data, extract features, generate paths, and save artifacts."""
-    LOG.info("Starting Polygon %s shadow forecast pipeline.", config["asset"])
-    client = PolygonClient()
-    raw_bars = client.fetch_recent(config)
-    save_raw_bars(raw_bars, config)
-
+    LOG.info("Starting %s shadow forecast pipeline.", config["asset"])
     interval_seconds = int(config["forecast"]["interval_seconds"])
-    bars = repair_missing_bars(raw_bars, interval_seconds) if config["history"].get("repair_missing_bars", True) else raw_bars
-    features = build_feature_frame(bars, config)
-    save_processed_features(features, config)
-
-    block_bars = int(config["sampling"]["block_minutes"] * 60 / interval_seconds)
-    library = build_session_library(features, block_bars)
-    state = extract_current_state(features)
-    sampler = PathSampler(library, seed=int(config["forecast"]["random_seed"]))
-    model = load_forecast_model(config)
-    model_entrypoint = configured_model_entrypoint(config)
-    output = model.generate(
-        ForecastContext(
-            config=config,
-            bars=bars,
-            features=features,
-            library=library,
-            state=state,
-            sampler=sampler,
-        )
-    )
-    paths = output.paths
-    timestamps = output.timestamps
+    provider = load_forecast_provider(config)
+    forecast = provider.generate(config, prompt_start_time=prompt_start_time)
+    paths = forecast.paths
+    timestamps = forecast.timestamps
     validate_paths(
         paths,
         num_paths=int(config["forecast"]["num_paths"]),
         points_per_path=int(config["forecast"]["horizon_seconds"] / interval_seconds) + 1,
     )
-
-    metadata = {
-        "model_version": str(getattr(model, "model_version", model.__class__.__name__)),
-        "model_entrypoint": model_entrypoint,
-        "asset": config["asset"],
-        "polygon_ticker": config["polygon_ticker"],
-        "generated_at": utc_now().isoformat(),
-        "data_cutoff": state.timestamp,
-        "prompt_start_time": prompt_start_time,
-        "num_raw_bars": len(raw_bars),
-        "num_feature_rows": len(features),
-        "num_session_blocks": len(library),
-        "path_shape": list(paths.shape),
-        "current_price": state.price,
-        "debug": bool(config.get("debug", False)),
-        "model_metadata": output.metadata,
-    }
-    forecast_dir = save_forecast_run(paths, timestamps, metadata, state.to_dict(), config)
+    forecast_dir = save_forecast_run(
+        paths,
+        timestamps,
+        forecast.metadata,
+        forecast.feature_snapshot,
+        config,
+    )
     registry = ForecastRegistry(config["storage"]["registry_path"])
-    registry.register_forecast(str(forecast_dir), metadata)
-    LOG.info("Completed %s forecast: %s", config["asset"], metadata)
-    return {"forecast_dir": str(forecast_dir), "metadata": metadata}
+    registry.register_forecast(str(forecast_dir), forecast.metadata)
+    LOG.info("Completed %s forecast: %s", config["asset"], forecast.metadata)
+    return {"forecast_dir": str(forecast_dir), "metadata": forecast.metadata}
 
 
 def run_btc_forecast(config: dict, prompt_start_time: str | None = None) -> dict:

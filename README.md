@@ -192,10 +192,82 @@ The public baseline model is configured in `config/default.yaml`:
 ```yaml
 model:
   entrypoint: synth_shadow.models.baseline:SessionPathBaselineModel
+  endpoint:
+  timeout_seconds: 120
 ```
 
-To use a private model, install the private repo into the same virtualenv and
-point the harness at its import path:
+There are two private model modes.
+
+### Private HTTP Inference Node
+
+For live deployment, prefer an HTTP inference node. In this mode the private
+model service owns data access, 1-minute BTC history, feature/vector creation,
+similarity matching, calibration, and path generation. The public harness only
+requests a forecast, validates/saves it, scores matured forecasts, and handles
+loop resiliency.
+
+Configure it with:
+
+```bash
+export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
+export SYNTH_SHADOW_CONFIG=config/default.yaml
+export LOG_LEVEL=DEBUG
+```
+
+The public harness sends one request per forecast cycle:
+
+```json
+{
+  "asset": "BTC",
+  "polygon_ticker": "X:BTCUSD",
+  "prompt_start_time": "2026-07-12T16:29:00Z",
+  "horizon_seconds": 86400,
+  "interval_seconds": 300,
+  "num_paths": 1000,
+  "generated_at": "..."
+}
+```
+
+Expected response from the private node:
+
+```json
+{
+  "asset": "BTC",
+  "model_version": "private_btc_similarity_v1",
+  "data_cutoff": "2026-07-12T16:30:00Z",
+  "current_price": 64124.29,
+  "paths": [[64124.29, 64120.1, "... 289 points total"]],
+  "timestamps": ["2026-07-12T16:30:00Z", "... 289 timestamps total"],
+  "diagnostics": {
+    "data_source": "private_1m_btc_store",
+    "num_raw_bars": 250000,
+    "num_feature_rows": 249000,
+    "nearest_neighbors": 64
+  },
+  "metadata": {
+    "notes": "optional private diagnostics"
+  }
+}
+```
+
+`timestamps` may be omitted if `data_cutoff` is supplied; the public harness
+will build `289` timestamps at 5-minute resolution from `data_cutoff`.
+
+The public harness validates:
+
+```text
+paths shape == num_paths x 289
+timestamp count == 289
+timestamp spacing == 300 seconds
+prices are finite and positive
+first timestamp equals data_cutoff
+first path price equals current_price
+```
+
+### Private In-Process Package
+
+For research/dev, you can still install a private Python package into the same
+virtualenv and point the harness at its import path:
 
 ```bash
 cd ~
@@ -320,7 +392,7 @@ This does:
 
 ```text
 1. sync Synth BTC prompts
-2. generate a Polygon forecast tagged to the latest prompt
+2. generate a prompt-aligned forecast tagged to the latest prompt
 3. inspect generated path percentiles
 4. try to score any matured pending forecasts
 5. fetch latest Synth BTC miner scores
@@ -328,12 +400,24 @@ This does:
 7. join CRPS and rewards by miner UID
 ```
 
-The sanity version also prints the live forecast latency, data, and path checks
-before it tries to score matured pending forecasts.
+The sanity version also prints live forecast latency and path checks before it
+tries to score matured pending forecasts. With `SYNTH_MODEL_ENDPOINT` set, it
+calls the private HTTP model node once per cycle and prints the diagnostics
+returned by that node. Without `SYNTH_MODEL_ENDPOINT`, it uses the public local
+baseline.
 
 Fresh forecasts usually cannot be scored immediately because Synth's realized
 path is only available after the 24h horizon has matured. In that case
 `score-matured` logs a 404 warning and continues.
+
+Scoring is throttled:
+
+```text
+only forecasts older than horizon + maturity_grace_seconds are attempted
+default maturity_grace_seconds: 300
+default max_matured_score_attempts_per_cycle: 3
+Synth 429 stops scoring attempts for that cycle
+```
 
 Useful individual commands:
 
@@ -354,6 +438,10 @@ while true; do
   sleep 300
 done 2>&1 | tee -a logs/btc_live_sanity_cycle.log
 ```
+
+The loop calls the model provider once, then sleeps for 300 seconds. If the
+private HTTP node is configured, that means one `/predict` call per 5-minute
+cycle.
 
 ## CRPS And Reward Benchmarks
 

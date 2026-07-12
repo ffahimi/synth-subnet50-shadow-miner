@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
+import requests
 
 from synth_shadow.scoring.crps import score_synth_btc_24h
 from synth_shadow.scoring.synth_score import compare_to_miners
@@ -59,14 +61,41 @@ def score_matured_forecasts(config: dict) -> list[dict[str, Any]]:
     """Try to score every pending forecast; skip ones whose realized path is not ready."""
     registry = ForecastRegistry(config["storage"]["registry_path"])
     results = []
-    for row in registry.list_forecasts(status="pending", asset=config["asset"]):
+    pending = registry.list_forecasts(status="pending", asset=config["asset"])
+    matured = [row for row in pending if _is_matured(row, config)]
+    max_attempts = int(config.get("scoring", {}).get("max_matured_score_attempts_per_cycle", 3))
+    LOG.info(
+        "Scoring matured forecasts asset=%s pending=%s matured=%s max_attempts=%s",
+        config["asset"],
+        len(pending),
+        len(matured),
+        max_attempts,
+    )
+    for row in matured[:max_attempts]:
         forecast_dir = row["forecast_dir"]
         try:
             results.append(score_forecast_dir(config, forecast_dir))
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            LOG.warning("Could not score pending forecast %s: %s", forecast_dir, exc)
+            if status_code == 429:
+                LOG.warning("Stopping matured scoring for this cycle after Synth 429 rate limit.")
+                break
         except Exception as exc:  # noqa: BLE001 - scoring loop should continue.
             LOG.warning("Could not score pending forecast %s: %s", forecast_dir, exc)
     LOG.info("Scored %s matured forecasts.", len(results))
     return results
+
+
+def _is_matured(row: dict[str, Any], config: dict) -> bool:
+    prompt_start = pd.Timestamp(row["prompt_start_time"])
+    if prompt_start.tzinfo is None:
+        prompt_start = prompt_start.tz_localize("UTC")
+    else:
+        prompt_start = prompt_start.tz_convert("UTC")
+    horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
+    grace = pd.Timedelta(seconds=int(config.get("scoring", {}).get("maturity_grace_seconds", 300)))
+    return pd.Timestamp.utcnow() >= prompt_start + horizon + grace
 
 
 def _save_realized_path(config: dict, payload: dict[str, Any]) -> Path:

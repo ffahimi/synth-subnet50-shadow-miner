@@ -25,6 +25,8 @@ forecast:
 
 model:
   entrypoint: synth_shadow.models.baseline:SessionPathBaselineModel
+  endpoint:
+  timeout_seconds: 120
 
 synth:
   base_url: https://api.synthdata.co
@@ -36,6 +38,10 @@ synth:
   score_lookback_days: 3
   competition: crypto-24h
   fetch_rewards_in_cycle: false
+
+scoring:
+  maturity_grace_seconds: 300
+  max_matured_score_attempts_per_cycle: 3
 
 backtest:
   days: 1

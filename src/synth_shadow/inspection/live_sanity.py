@@ -13,6 +13,8 @@ import pandas as pd
 from synth_shadow.data.polygon_client import PolygonClient
 from synth_shadow.data.schema import repair_missing_bars
 from synth_shadow.features.pipeline import build_feature_frame
+from synth_shadow.forecasting.http_provider import configured_endpoint
+from synth_shadow.forecasting.loader import load_forecast_provider
 from synth_shadow.models.current_state import extract_current_state
 from synth_shadow.models.loader import configured_model_entrypoint, load_forecast_model
 from synth_shadow.models.path_sampler import PathSampler
@@ -32,6 +34,9 @@ LOG = logging.getLogger(__name__)
 
 def run_live_forecast_sanity(config: dict, prompt_start_time: str | None = None) -> dict[str, Any]:
     """Run one live forecast with detailed causality, shape, and latency checks."""
+    if configured_endpoint(config):
+        return _run_provider_forecast_sanity(config, prompt_start_time=prompt_start_time)
+
     total_start = time.perf_counter()
     stage_latencies: dict[str, float] = {}
     interval_seconds = int(config["forecast"]["interval_seconds"])
@@ -155,6 +160,92 @@ def run_live_forecast_sanity(config: dict, prompt_start_time: str | None = None)
         forecast_dir,
         total_latency,
         paths.shape,
+    )
+    return result
+
+
+def _run_provider_forecast_sanity(config: dict, prompt_start_time: str | None = None) -> dict[str, Any]:
+    """Run sanity checks for a configured external forecast provider."""
+    stage_latencies: dict[str, float] = {}
+    total_start = time.perf_counter()
+    interval_seconds = int(config["forecast"]["interval_seconds"])
+    expected_interval = pd.Timedelta(seconds=interval_seconds)
+    expected_points = int(config["forecast"]["horizon_seconds"] / interval_seconds) + 1
+    expected_paths = int(config["forecast"]["num_paths"])
+
+    provider = load_forecast_provider(config)
+    forecast = _timed(
+        stage_latencies,
+        "provider_generate",
+        lambda: provider.generate(config, prompt_start_time=prompt_start_time),
+    )
+    _timed(
+        stage_latencies,
+        "validate_paths",
+        lambda: validate_paths(
+            forecast.paths,
+            num_paths=expected_paths,
+            points_per_path=expected_points,
+        ),
+    )
+    path_checks = _path_checks(
+        paths=forecast.paths,
+        timestamps=forecast.timestamps,
+        state_price=float(forecast.metadata["current_price"]),
+        state_timestamp=pd.Timestamp(forecast.metadata["data_cutoff"]),
+        expected_paths=expected_paths,
+        expected_points=expected_points,
+        expected_interval=expected_interval,
+    )
+    data_checks = {
+        "provider": forecast.metadata.get("provider"),
+        "data_cutoff": forecast.metadata.get("data_cutoff"),
+        "diagnostics": forecast.diagnostics,
+        "public_harness_data_note": (
+            "HTTP provider owns data fetch/vectorization; public harness validates returned paths."
+        ),
+    }
+    forecast.metadata["sanity"] = {
+        "latency_seconds": stage_latencies,
+        "data_checks": data_checks,
+        "path_checks": path_checks,
+    }
+    forecast_dir = _timed(
+        stage_latencies,
+        "save_forecast",
+        lambda: save_forecast_run(
+            forecast.paths,
+            forecast.timestamps,
+            forecast.metadata,
+            forecast.feature_snapshot,
+            config,
+        ),
+    )
+    _timed(
+        stage_latencies,
+        "register_forecast",
+        lambda: ForecastRegistry(config["storage"]["registry_path"]).register_forecast(
+            str(forecast_dir),
+            forecast.metadata,
+            status="pending" if prompt_start_time else "debug",
+        ),
+    )
+    stage_latencies["total"] = round(time.perf_counter() - total_start, 6)
+    forecast.metadata["sanity"]["latency_seconds"] = stage_latencies
+    result = {
+        "forecast_dir": str(forecast_dir),
+        "metadata": forecast.metadata,
+        "latency_seconds": stage_latencies,
+        "data_checks": data_checks,
+        "path_checks": path_checks,
+    }
+    _print_sanity_report(result)
+    LOG.info(
+        "HTTP forecast sanity passed asset=%s forecast_dir=%s total_latency=%.3fs path_shape=%s",
+        config["asset"],
+        forecast_dir,
+        stage_latencies["total"],
+        forecast.paths.shape,
     )
     return result
 
