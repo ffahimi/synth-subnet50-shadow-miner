@@ -1,130 +1,163 @@
 from __future__ import annotations
 
+import os
+import random
+import secrets
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
+from synth_shadow.assets import apply_asset
 from synth_shadow.backtest import rolling
+from synth_shadow.config import load_config
 
 
-def _config(tmp_path):
-    return {
-        "asset": "ETH",
-        "polygon_ticker": "X:ETHUSD",
-        "forecast": {
-            "horizon_seconds": 30 * 60,
-            "interval_seconds": 5 * 60,
-            "num_paths": 99,
-            "random_seed": 7,
-        },
-        "history": {
-            "lookback_days": 1,
-            "bar_multiplier": 5,
-            "bar_timespan": "minute",
-            "adjusted": True,
-        },
-        "backtest": {
-            "days": 1,
-            "stride_minutes": 5,
-            "max_origins": None,
-            "num_paths": 99,
-            "compare_miners": 4,
-        },
-        "sampling": {"block_minutes": 10},
-        "storage": {"backtest_dir": str(tmp_path / "backtests")},
-    }
+def _print_report(title: str, values: dict[str, object]) -> None:
+    print(f"\n[{title}]")
+    for key, value in values.items():
+        print(f"{key}: {value}")
 
 
-def _bars(periods: int = 80) -> pd.DataFrame:
-    timestamps = pd.date_range("2026-07-01T00:00:00Z", periods=periods, freq="5min")
-    close = 1000.0 + np.arange(periods, dtype=float)
-    return pd.DataFrame(
-        {
-            "timestamp": timestamps,
-            "open": close,
-            "high": close,
-            "low": close,
-            "close": close,
-            "volume": 1.0,
-            "vwap": close,
-            "transactions": 1,
-        }
-    )
-
-
-def _features(bars: pd.DataFrame, _config: dict) -> pd.DataFrame:
-    features = bars.copy()
-    features["session"] = "test"
-    features["log_return"] = np.log(features["close"]).diff().fillna(0.0)
-    features["vol_1h"] = 0.01
-    features["vol_4h"] = 0.02
-    features["vol_of_vol_1h"] = 0.001
-    features["vol_of_vol_4h"] = 0.002
-    features["vol_slope"] = 0.0
-    features["momentum_1h"] = 0.0
-    features["momentum_4h"] = 0.0
-    features["kurtosis_4h"] = 0.0
-    features["abs_return"] = features["log_return"].abs()
-    return features
-
-
-def test_rolling_backtest_is_causal_and_uses_expected_resolution_and_path_length(
+def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
     monkeypatch,
     tmp_path,
 ):
-    config = _config(tmp_path)
-    source_bars = _bars()
-    expected_points = 7
-    expected_paths = 4
-    seen = {
+    """Live recent-data audit for rolling backtest causality and path dimensions."""
+    config = apply_asset(load_config("config/default.yaml"), "ETH")
+    if not os.getenv("POLYGON_API_KEY"):
+        pytest.skip("POLYGON_API_KEY is required for the recent Polygon backtest audit.")
+
+    audit_days = 2.0
+    stride_minutes = 5
+    origins_to_score = 5
+    num_paths = 8
+    interval_seconds = int(config["forecast"]["interval_seconds"])
+    horizon_seconds = int(config["forecast"]["horizon_seconds"])
+    expected_interval = pd.Timedelta(seconds=interval_seconds)
+    expected_points = int(horizon_seconds / interval_seconds) + 1
+    sample_seed = secrets.randbits(32)
+    selected_origins: list[pd.Timestamp] = []
+    audit = {
+        "feature_rows_seen": None,
+        "library_rows_per_origin": [],
         "library_max_timestamps": [],
-        "states": [],
+        "state_timestamps": [],
+        "state_prices": [],
         "forecast_shapes": [],
         "realized_lengths": [],
         "realized_first_prices": [],
     }
 
+    source_bars = rolling._load_backtest_bars(config, audit_days)
+    bar_diffs = source_bars["timestamp"].diff().dropna()
+    assert not source_bars.empty
+    assert bar_diffs.eq(expected_interval).all()
+
+    _print_report(
+        "recent polygon source data",
+        {
+            "asset": config["asset"],
+            "polygon_ticker": config["polygon_ticker"],
+            "sample_seed": sample_seed,
+            "raw_bar_count": len(source_bars),
+            "raw_first_timestamp": source_bars["timestamp"].min(),
+            "raw_last_timestamp": source_bars["timestamp"].max(),
+            "raw_resolution_seconds": interval_seconds,
+            "close_min": round(float(source_bars["close"].min()), 6),
+            "close_max": round(float(source_bars["close"].max()), 6),
+            "close_last": round(float(source_bars["close"].iloc[-1]), 6),
+        },
+    )
+
+    original_build_feature_frame = rolling.build_feature_frame
+    original_select_origins = rolling._select_origins
+    original_extract_current_state = rolling.extract_current_state
+
     monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: source_bars)
-    monkeypatch.setattr(rolling, "build_feature_frame", _features)
     monkeypatch.setattr(rolling, "_reference_miners", lambda _config: [])
     monkeypatch.setattr(rolling, "_save_backtest", lambda _rows, _result, _config: tmp_path / "saved")
 
-    def fake_build_session_library(past_features: pd.DataFrame, block_bars: int):
-        assert block_bars == 2
+    def audited_build_feature_frame(bars: pd.DataFrame, patched_config: dict) -> pd.DataFrame:
+        features = original_build_feature_frame(bars, patched_config)
+        audit["feature_rows_seen"] = len(features)
+        assert features["timestamp"].is_monotonic_increasing
+        feature_diffs = features["timestamp"].diff().dropna()
+        assert feature_diffs.eq(expected_interval).all()
+        _print_report(
+            "feature frame",
+            {
+                "feature_row_count": len(features),
+                "feature_first_timestamp": features["timestamp"].min(),
+                "feature_last_timestamp": features["timestamp"].max(),
+                "feature_resolution_seconds": interval_seconds,
+                "sessions": {
+                    session: int(count)
+                    for session, count in features["session"].value_counts().sort_index().items()
+                },
+            },
+        )
+        return features
+
+    def random_recent_origins(
+        features: pd.DataFrame,
+        patched_config: dict,
+        days: float,
+        stride: int,
+        max_origins: int | None,
+    ) -> list[pd.Timestamp]:
+        candidates = original_select_origins(features, patched_config, days, stride, None)
+        assert len(candidates) >= origins_to_score
+        max_start = len(candidates) - origins_to_score
+        start = random.Random(sample_seed).randint(0, max_start)
+        sample = candidates[start : start + origins_to_score]
+        selected_origins[:] = [pd.Timestamp(origin) for origin in sample]
+        _print_report(
+            "random recent origin sample",
+            {
+                "candidate_origin_count": len(candidates),
+                "sample_start_index": start,
+                "sample_origin_count": len(sample),
+                "sample_first_origin": sample[0],
+                "sample_last_origin": sample[-1],
+                "requested_stride_minutes": stride,
+                "max_origins_argument": max_origins,
+            },
+        )
+        return sample
+
+    def audited_build_session_library(past_features: pd.DataFrame, block_bars: int):
         assert not past_features.empty
         assert past_features["timestamp"].is_monotonic_increasing
-        diffs = past_features["timestamp"].diff().dropna().unique()
-        assert len(diffs) == 1
-        assert diffs[0] == pd.Timedelta(minutes=5)
-        seen["library_max_timestamps"].append(pd.Timestamp(past_features["timestamp"].max()))
-        return [SimpleNamespace(session="test")]
+        diffs = past_features["timestamp"].diff().dropna()
+        assert diffs.eq(expected_interval).all()
+        audit["library_rows_per_origin"].append(len(past_features))
+        audit["library_max_timestamps"].append(pd.Timestamp(past_features["timestamp"].max()))
+        return [SimpleNamespace(session=str(past_features["session"].iloc[-1]))]
 
-    def fake_extract_current_state(past_features: pd.DataFrame):
-        row = past_features.iloc[-1]
-        state = SimpleNamespace(
-            timestamp=str(row["timestamp"]),
-            price=float(row["close"]),
-            session="test",
-        )
-        seen["states"].append(state)
+    def audited_extract_current_state(past_features: pd.DataFrame):
+        state = original_extract_current_state(past_features)
+        audit["state_timestamps"].append(pd.Timestamp(state.timestamp))
+        audit["state_prices"].append(float(state.price))
         return state
 
-    class FakePathSampler:
+    class AuditedPathSampler:
         def __init__(self, library, seed: int) -> None:
             assert library
+            self.library = library
             self.seed = seed
 
-    def fake_generate_paths(state, _sampler, patched_config):
-        shape = (patched_config["forecast"]["num_paths"], expected_points)
-        seen["forecast_shapes"].append(shape)
-        path = np.full(shape, float(state.price))
-        return path, {"state_timestamp": state.timestamp}
+    def audited_generate_paths(state, _sampler, patched_config):
+        shape = (int(patched_config["forecast"]["num_paths"]), expected_points)
+        audit["forecast_shapes"].append(shape)
+        paths = np.full(shape, float(state.price))
+        return paths, {"state_timestamp": state.timestamp}
 
-    def fake_score(paths: np.ndarray, realized: np.ndarray):
-        seen["realized_lengths"].append(len(realized))
-        seen["realized_first_prices"].append(float(realized[0]))
-        assert paths.shape == (expected_paths, expected_points)
+    def audited_score(paths: np.ndarray, realized: np.ndarray):
+        audit["realized_lengths"].append(len(realized))
+        audit["realized_first_prices"].append(float(realized[0]))
+        assert paths.shape == (num_paths, expected_points)
         assert len(realized) == expected_points
         return {
             "raw_crps": 1.0,
@@ -137,45 +170,78 @@ def test_rolling_backtest_is_causal_and_uses_expected_resolution_and_path_length
             },
         }
 
-    monkeypatch.setattr(rolling, "build_session_library", fake_build_session_library)
-    monkeypatch.setattr(rolling, "extract_current_state", fake_extract_current_state)
-    monkeypatch.setattr(rolling, "PathSampler", FakePathSampler)
-    monkeypatch.setattr(rolling, "generate_paths", fake_generate_paths)
-    monkeypatch.setattr(rolling, "score_synth_btc_24h", fake_score)
+    monkeypatch.setattr(rolling, "build_feature_frame", audited_build_feature_frame)
+    monkeypatch.setattr(rolling, "_select_origins", random_recent_origins)
+    monkeypatch.setattr(rolling, "build_session_library", audited_build_session_library)
+    monkeypatch.setattr(rolling, "extract_current_state", audited_extract_current_state)
+    monkeypatch.setattr(rolling, "PathSampler", AuditedPathSampler)
+    monkeypatch.setattr(rolling, "generate_paths", audited_generate_paths)
+    monkeypatch.setattr(rolling, "score_synth_btc_24h", audited_score)
 
     result = rolling.run_rolling_backtest(
         config,
-        days=0.5,
-        stride_minutes=10,
-        max_origins=5,
-        num_paths=expected_paths,
+        days=audit_days,
+        stride_minutes=stride_minutes,
+        max_origins=origins_to_score,
+        num_paths=num_paths,
     )
 
-    origins = [pd.Timestamp(row["origin"]) for row in result["first_rows"] + result["last_rows"]]
-    scored_origins = [pd.Timestamp(state.timestamp) for state in seen["states"]]
-    assert len(scored_origins) == 5
-    assert scored_origins == sorted(scored_origins)
+    scored_origins = audit["state_timestamps"]
+    assert len(scored_origins) == origins_to_score
+    assert selected_origins == scored_origins
     assert all(
-        later - earlier == pd.Timedelta(minutes=10)
+        later - earlier == pd.Timedelta(minutes=stride_minutes)
         for earlier, later in zip(scored_origins, scored_origins[1:])
     )
 
-    for origin, library_max, state, realized_first in zip(
+    for origin, library_max, state_price, realized_first in zip(
         scored_origins,
-        seen["library_max_timestamps"],
-        seen["states"],
-        seen["realized_first_prices"],
+        audit["library_max_timestamps"],
+        audit["state_prices"],
+        audit["realized_first_prices"],
     ):
         assert library_max == origin
-        assert pd.Timestamp(state.timestamp) == origin
-        assert realized_first == state.price
+        assert realized_first == state_price
 
-    assert all(shape == (expected_paths, expected_points) for shape in seen["forecast_shapes"])
-    assert seen["realized_lengths"] == [expected_points] * 5
-    assert result["summary"]["origin_count"] == 5
+    assert all(shape == (num_paths, expected_points) for shape in audit["forecast_shapes"])
+    assert audit["realized_lengths"] == [expected_points] * origins_to_score
+    assert result["summary"]["origin_count"] == origins_to_score
     assert result["config"] == {
-        "days": 0.5,
-        "stride_minutes": 10,
-        "num_paths": expected_paths,
+        "days": audit_days,
+        "stride_minutes": stride_minutes,
+        "num_paths": num_paths,
     }
-    assert origins
+
+    origin_details = [
+        {
+            "origin": str(origin),
+            "library_rows": rows,
+            "state_price": round(price, 6),
+            "forecast_shape": shape,
+            "realized_points": realized_points,
+        }
+        for origin, rows, price, shape, realized_points in zip(
+            scored_origins,
+            audit["library_rows_per_origin"],
+            audit["state_prices"],
+            audit["forecast_shapes"],
+            audit["realized_lengths"],
+        )
+    ]
+    _print_report(
+        "passed audit checks",
+        {
+            "past_only_check": "PASSED: each library/state max timestamp equals its origin",
+            "source_resolution_check": f"PASSED: all source/feature bars are {interval_seconds}s apart",
+            "origin_stride_check": f"PASSED: {origins_to_score} origins are {stride_minutes} minutes apart",
+            "forecast_shape_check": f"PASSED: every forecast is {num_paths} x {expected_points}",
+            "realized_length_check": f"PASSED: every realized path has {expected_points} points",
+            "realized_origin_alignment": "PASSED: realized first price equals current state price",
+            "scored_origin_count": len(scored_origins),
+            "scored_origins": [str(origin) for origin in scored_origins],
+            "library_rows_per_origin": audit["library_rows_per_origin"],
+            "forecast_shapes": audit["forecast_shapes"],
+            "origin_details": origin_details,
+            "result_config": result["config"],
+        },
+    )
