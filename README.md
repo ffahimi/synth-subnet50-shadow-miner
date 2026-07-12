@@ -97,6 +97,9 @@ src/synth_shadow/
   orchestration/   full shadow-cycle runner
   storage/         forecast files and SQLite registry
   utils/           time and logging helpers
+
+example-inference-node/
+  public FastAPI example of a private HTTP model node
 ```
 
 ## Setup
@@ -240,6 +243,46 @@ model service owns data access, 1-minute BTC history, feature/vector creation,
 similarity matching, calibration, and path generation. The public harness only
 requests a forecast, validates/saves it, scores matured forecasts, and handles
 loop resiliency.
+
+This repo includes a simple wrapper example in `example-inference-node/`. It is
+safe to keep public because it is only a scaffold: it uses Polygon 1-minute REST
+data and a placeholder similarity/bootstrap generator. Copy that folder into a
+separate private repo before adding real model logic.
+
+To try the example locally:
+
+```bash
+cd example-inference-node
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+export POLYGON_API_KEY=your_polygon_key_here
+uvicorn private_synth_models.server:app --host 127.0.0.1 --port 8088
+```
+
+Then in the public shadow miner:
+
+```bash
+export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
+.venv/bin/python -m synth_shadow.cli run-synth-shadow-sanity --asset BTC --debug
+```
+
+To turn the example into a private repo:
+
+```bash
+cd /Users/ffahimi/Documents/Code
+cp -R synth-subnet50-shadow-miner/example-inference-node synth-btc-inference-private
+cd synth-btc-inference-private
+git init
+git branch -M main
+git add .
+git commit -m "Initial private BTC inference node"
+git remote add origin git@github.com:ffahimi/synth-btc-inference-private.git
+git push -u origin main
+```
+
+Keep that GitHub repo private and replace the placeholder data/features/model
+modules there.
 
 Configure it with:
 
