@@ -29,6 +29,41 @@ SQLite local forecast registry
 rolling historical Polygon backtest
 ```
 
+## Current Public Harness Architecture
+
+This repo is the public shadow-miner harness. It is responsible for running the
+Synth-facing workflow and validating forecast artifacts. It is not meant to hold
+private model alpha once the model is split into a private inference node.
+
+Current responsibilities:
+
+```text
+sync Synth prompts
+request or generate one forecast per cycle
+validate returned paths and timestamps
+save forecast artifacts under data/forecasts/<ASSET>/<timestamp>/
+register forecasts in SQLite
+inspect path percentiles
+score only matured pending forecasts
+fetch public miner CRPS/leaderboard benchmarks
+print live sanity/latency diagnostics
+```
+
+Forecast provider modes:
+
+```text
+local provider:
+  public repo fetches Polygon 5m bars, builds public features, runs baseline model
+
+HTTP provider:
+  public repo calls SYNTH_MODEL_ENDPOINT once per forecast cycle
+  private service owns data access, 1m BTC data, vectorization, matching, and forecasting
+```
+
+The live loop should normally sleep `300` seconds between cycles. With
+`SYNTH_MODEL_ENDPOINT` set, this means the private inference node receives one
+`POST /predict` request per 5-minute cycle.
+
 Supported assets:
 
 ```text
@@ -214,7 +249,16 @@ export SYNTH_SHADOW_CONFIG=config/default.yaml
 export LOG_LEVEL=DEBUG
 ```
 
-The public harness sends one request per forecast cycle:
+The public harness sends one request per forecast cycle.
+
+Endpoint:
+
+```text
+POST /predict
+Content-Type: application/json
+```
+
+Request body:
 
 ```json
 {
@@ -226,6 +270,18 @@ The public harness sends one request per forecast cycle:
   "num_paths": 1000,
   "generated_at": "..."
 }
+```
+
+Request field meanings:
+
+```text
+asset: Synth asset symbol, for example BTC
+polygon_ticker: public ticker mapping, for example X:BTCUSD
+prompt_start_time: latest synced Synth prompt start, nullable
+horizon_seconds: forecast horizon; currently 86400
+interval_seconds: output interval; currently 300
+num_paths: number of probabilistic paths requested; default 1000
+generated_at: public harness request time
 ```
 
 Expected response from the private node:
@@ -250,8 +306,28 @@ Expected response from the private node:
 }
 ```
 
-`timestamps` may be omitted if `data_cutoff` is supplied; the public harness
-will build `289` timestamps at 5-minute resolution from `data_cutoff`.
+Required response fields:
+
+```text
+data_cutoff: UTC timestamp for the first forecast point
+current_price: price at data_cutoff; all paths must start here
+paths: list[list[float]], shape num_paths x 289
+```
+
+Optional response fields:
+
+```text
+asset
+model_version
+timestamps
+diagnostics
+metadata
+feature_snapshot
+```
+
+`timestamps` may be omitted if `data_cutoff` is supplied. In that case the
+public harness builds `289` timestamps at 5-minute resolution from
+`data_cutoff`.
 
 The public harness validates:
 
@@ -263,6 +339,19 @@ prices are finite and positive
 first timestamp equals data_cutoff
 first path price equals current_price
 ```
+
+The public harness saves this response as a normal forecast run:
+
+```text
+paths.npz          compressed path matrix
+timestamps.csv    289 output timestamps
+metadata.json     model_version, model_entrypoint/endpoint, data_cutoff, diagnostics
+features.json     feature_snapshot if supplied, otherwise a minimal provider snapshot
+```
+
+If `prompt_start_time` is present, the forecast is registered as `pending` and
+will be eligible for CRPS scoring after the 24h horizon matures. Standalone
+sanity forecasts without a prompt are registered as `debug`.
 
 ### Private In-Process Package
 
@@ -442,6 +531,19 @@ done 2>&1 | tee -a logs/btc_live_sanity_cycle.log
 The loop calls the model provider once, then sleeps for 300 seconds. If the
 private HTTP node is configured, that means one `/predict` call per 5-minute
 cycle.
+
+With HTTP mode enabled, the sanity output changes slightly:
+
+```text
+provider_generate: latency of private /predict call
+validate_paths: public shape/finite/positive validation
+path sanity checks: timestamp spacing, first timestamp, first price, final percentiles
+data sanity checks: diagnostics returned by private inference node
+```
+
+The public harness does not inspect private feature vectors in HTTP mode. The
+private node should include its own diagnostics, for example raw 1m row count,
+feature row count, data cutoff, nearest-neighbor count, and model latency.
 
 ## CRPS And Reward Benchmarks
 
