@@ -37,13 +37,13 @@ def crps_over_points(predicted: np.ndarray, realized: np.ndarray) -> float:
 
 
 def crps_over_deltas(predicted: np.ndarray, realized: np.ndarray, step: int) -> float:
-    """Average CRPS over price changes at a given step length."""
+    """Average CRPS over price changes in basis points at a given step length."""
     if predicted.shape[1] != realized.shape[0]:
         raise ValueError(f"Shape mismatch: paths={predicted.shape}, realized={realized.shape}")
     if step <= 0 or step >= realized.shape[0]:
         raise ValueError(f"Invalid CRPS delta step: {step}")
-    predicted_delta = predicted[:, step:] - predicted[:, :-step]
-    realized_delta = realized[step:] - realized[:-step]
+    predicted_delta = _basis_point_changes(predicted[:, step:], predicted[:, :-step])
+    realized_delta = _basis_point_changes(realized[step:], realized[:-step])
     scores = [
         crps_ensemble(predicted_delta[:, idx], float(realized_delta[idx]))
         for idx in range(realized_delta.shape[0])
@@ -54,9 +54,9 @@ def crps_over_deltas(predicted: np.ndarray, realized: np.ndarray, step: int) -> 
 def score_synth_btc_24h(predicted: np.ndarray, realized: np.ndarray) -> dict[str, Any]:
     """Compute shadow CRPS components for BTC 24h.
 
-    The component set follows the documented BTC 24h evaluation scales:
-    5m, 30m, 3h, and 24h. The exact validator implementation may evolve, so
-    this module is intentionally isolated.
+    The component set follows the documented 24h evaluation scales: 5m, 30m,
+    3h, and 24h. Synth scores price changes in basis points so scores are
+    comparable across BTC, ETH, XAU, and other assets.
     """
     components = {
         "crps_5m": crps_over_deltas(predicted, realized, 1),
@@ -74,3 +74,7 @@ def score_synth_btc_24h(predicted: np.ndarray, realized: np.ndarray) -> dict[str
     score = {"raw_crps": float(raw_crps), "components": components}
     LOG.debug("Computed CRPS score: %s", score)
     return score
+
+
+def _basis_point_changes(current: np.ndarray, previous: np.ndarray) -> np.ndarray:
+    return ((current - previous) / previous) * 10000.0

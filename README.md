@@ -22,6 +22,7 @@ historical normalized session-path library
 forecast inspection and percentile summaries
 Synth prompt sync
 Synth latest score + leaderboard fetch
+CRPS in basis points, matching Synth's cross-asset score units
 CRPS/reward benchmark join by miner UID
 SQLite local forecast registry
 rolling historical Polygon backtest
@@ -303,6 +304,10 @@ miner_0_3_crps
 
 `miner_0_3_crps` is the compact comparison requested for the top four valid
 current Synth miners by CRPS, with reward context attached.
+
+CRPS components are scored on price changes in basis points, not raw dollar
+price changes. That keeps BTC, ETH, XAU, and other assets on the same unit
+scale, matching Synth's documented scoring methodology.
 
 ## Output Files
 
