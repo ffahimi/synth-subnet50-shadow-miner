@@ -13,12 +13,14 @@ data/processed/*
 data/forecasts/*
 data/realized/*
 data/reports/*
+data/backtests/*
 data/registry.sqlite3
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/forecasts/.gitkeep
 !data/realized/.gitkeep
 !data/reports/.gitkeep
+!data/backtests/.gitkeep
 
 logs/
 wallets/

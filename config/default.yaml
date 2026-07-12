@@ -20,6 +20,13 @@ synth:
   competition: crypto-24h
   fetch_rewards_in_cycle: false
 
+backtest:
+  days: 1
+  stride_minutes: 5
+  max_origins:
+  num_paths: 250
+  compare_miners: 4
+
 history:
   lookback_days: 14
   bar_multiplier: 5
@@ -66,6 +73,7 @@ storage:
   forecast_dir: data/forecasts
   realized_dir: data/realized
   reports_dir: data/reports
+  backtest_dir: data/backtests
   registry_path: data/registry.sqlite3
   raw_format: csv
   processed_format: csv

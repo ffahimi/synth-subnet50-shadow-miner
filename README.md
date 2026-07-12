@@ -76,7 +76,24 @@ synth-shadow generate-latest-prompt --debug
 synth-shadow inspect-latest --debug
 synth-shadow score-matured --debug
 synth-shadow benchmarks --debug
+synth-shadow backtest-rolling --debug --backtest-max-origins 12
 ```
+
+Historical rolling backtest:
+
+```bash
+# Quick smoke test: 12 origins, configured path count
+synth-shadow backtest-rolling --debug --backtest-max-origins 12
+
+# Full default: last 1 matured day, one origin every 5 minutes
+synth-shadow backtest-rolling --debug
+
+# Heavier full-path check with 1000 paths per origin
+synth-shadow backtest-rolling --debug --backtest-num-paths 1000
+```
+
+The backtest uses only Polygon bars before each origin to build the model, then
+scores the generated 24h path against the next 24h of Polygon realized closes.
 
 Outputs are written under:
 
@@ -86,6 +103,7 @@ data/processed/    repaired bars with sessions and features
 data/forecasts/    paths.npz, timestamps.csv, metadata.json, features.json
 data/realized/     Synth realized paths when matured forecasts can be scored
 data/reports/      latest forecast summary JSON
+data/backtests/    rolling historical backtest CSV + summary
 data/registry.sqlite3  local prompt/forecast/score registry
 ```
 

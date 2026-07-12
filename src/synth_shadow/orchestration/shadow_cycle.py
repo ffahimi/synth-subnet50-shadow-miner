@@ -8,6 +8,7 @@ from typing import Any
 from synth_shadow.inspection.forecast import inspect_forecast
 from synth_shadow.models.btc_generator import run_btc_forecast
 from synth_shadow.scoring.evaluator import score_matured_forecasts
+from synth_shadow.scoring.benchmarks import join_scores_to_leaderboard
 from synth_shadow.storage.registry import ForecastRegistry
 from synth_shadow.synth.client import SynthClient
 
@@ -51,6 +52,7 @@ def fetch_benchmarks(config: dict) -> dict[str, Any]:
         "latest_scores_count": len(latest_scores),
         "rewards_count": len(rewards),
         "leaderboard_count": len(leaderboard),
+        "crps_reward_top10": join_scores_to_leaderboard(latest_scores, leaderboard, limit=10),
         "latest_scores_sample": latest_scores[:3],
         "leaderboard_sample": leaderboard[:3],
     }
