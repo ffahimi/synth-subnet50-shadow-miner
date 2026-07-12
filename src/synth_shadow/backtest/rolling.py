@@ -50,6 +50,9 @@ def run_rolling_backtest(
     num_paths = int(num_paths if num_paths is not None else backtest_cfg["num_paths"])
 
     run_config = deepcopy(config)
+    run_config["backtest"]["days"] = days
+    run_config["backtest"]["stride_minutes"] = stride_minutes
+    run_config["backtest"]["max_origins"] = max_origins
     run_config["forecast"]["num_paths"] = num_paths
 
     LOG.info(
