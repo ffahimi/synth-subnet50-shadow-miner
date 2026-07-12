@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 
 from synth_shadow.assets import apply_asset
 from synth_shadow.backtest import rolling
@@ -53,7 +54,16 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         "realized_first_prices": [],
     }
 
-    source_bars = rolling._load_backtest_bars(config, audit_days)
+    try:
+        source_bars = rolling._load_backtest_bars(config, audit_days)
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code in {401, 403}:
+            pytest.skip(
+                "Polygon rejected POLYGON_API_KEY during live audit "
+                f"with HTTP {status_code}. Set a valid key to run this test."
+            )
+        raise
     bar_diffs = source_bars["timestamp"].diff().dropna()
     assert not source_bars.empty
     assert bar_diffs.eq(expected_interval).all()
