@@ -23,7 +23,6 @@ from synth_shadow.models.loader import configured_model_entrypoint, load_forecas
 from synth_shadow.models.path_sampler import PathSampler
 from synth_shadow.models.protocol import ForecastContext
 from synth_shadow.models.session_path_model import build_session_library
-from synth_shadow.scoring.benchmarks import select_reference_miners
 from synth_shadow.scoring.crps import score_synth_btc_24h
 from synth_shadow.scoring.synth_score import rank_against_miners, top_miner_crps_stats
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
@@ -94,23 +93,34 @@ def run_rolling_backtest(
     model = None if provider else load_forecast_model(run_config)
     model_version = "http_provider" if provider else str(getattr(model, "model_version", model.__class__.__name__))
     model_entrypoint = endpoint if provider else configured_model_entrypoint(run_config)
-    latest_miner_scores = _latest_miner_scores(run_config)
-    top10_stats = top_miner_crps_stats(latest_miner_scores, count=10)
-    if top10_stats["count"]:
+    historical_scores = _historical_miner_scores_for_origins(run_config, origins, stride_minutes)
+    if historical_scores:
+        first_snapshot = _nearest_historical_miner_scores(
+            origins[0],
+            historical_scores,
+            tolerance=pd.Timedelta(minutes=max(stride_minutes, 5)),
+        )
+        first_top10 = top_miner_crps_stats(first_snapshot["scores"], count=10) if first_snapshot else None
+    else:
+        first_snapshot = None
+        first_top10 = None
+    if first_top10 and first_top10["count"]:
         colored_debug(
             LOG,
             (
-                "[LATEST TOP10 MINERS] asset=%s count=%s mean=%.6f median=%.6f "
-                "std=%.6f min=%.6f max=%.6f scored_time=%s"
+                "[HISTORICAL TOP10 MINERS] asset=%s first_origin=%s matched_scored_time=%s "
+                "delta_minutes=%.2f count=%s mean=%.6f median=%.6f std=%.6f min=%.6f max=%.6f"
             ),
             run_config["asset"],
-            top10_stats["count"],
-            top10_stats["mean"],
-            top10_stats["median"],
-            top10_stats["std"],
-            top10_stats["min"],
-            top10_stats["max"],
-            top10_stats["scored_time"],
+            origins[0],
+            first_snapshot["scored_time"],
+            first_snapshot["delta_minutes"],
+            first_top10["count"],
+            first_top10["mean"],
+            first_top10["median"],
+            first_top10["std"],
+            first_top10["min"],
+            first_top10["max"],
             color=YELLOW,
         )
 
@@ -167,17 +177,39 @@ def run_rolling_backtest(
                 "raw_crps": float(score["raw_crps"]),
                 **{name: float(value) for name, value in score["components"].items()},
             }
+            historical_snapshot = _nearest_historical_miner_scores(
+                origin,
+                historical_scores,
+                tolerance=pd.Timedelta(minutes=max(stride_minutes, 5)),
+            )
+            miner_scores_at_origin = historical_snapshot["scores"] if historical_snapshot else []
+            top10_stats = top_miner_crps_stats(miner_scores_at_origin, count=10)
+            historical_rank = rank_against_miners(row["raw_crps"], miner_scores_at_origin)
+            row.update(
+                {
+                    "historical_rank": historical_rank["rank"],
+                    "historical_miner_count": historical_rank["miner_count"],
+                    "historical_miners_beaten": historical_rank["miners_beaten"],
+                    "historical_percentile_beaten": historical_rank["percentile_beaten"],
+                    "matched_scored_time": historical_snapshot["scored_time"] if historical_snapshot else None,
+                    "score_time_delta_min": historical_snapshot["delta_minutes"] if historical_snapshot else None,
+                    "historical_top10_mean": top10_stats["mean"],
+                    "historical_top10_median": top10_stats["median"],
+                    "historical_top10_std": top10_stats["std"],
+                    "gap_vs_historical_mean": _gap(row["raw_crps"], top10_stats["mean"]),
+                    "gap_vs_historical_median": _gap(row["raw_crps"], top10_stats["median"]),
+                }
+            )
             rows.append(row)
-            latest_rank = rank_against_miners(row["raw_crps"], latest_miner_scores)
             colored_debug(
                 LOG,
                 (
                     "[BACKTEST CRPS] asset=%s origin=%s raw=%.6f "
                     "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
-                    "latest_rank_estimate=%s/%s latest_miners_beaten=%s "
-                    "latest_percentile_beaten=%s "
-                    "latest_top10_mean=%s latest_top10_median=%s latest_top10_std=%s "
-                    "gap_vs_latest_mean=%s gap_vs_latest_median=%s "
+                    "historical_rank=%s/%s historical_miners_beaten=%s "
+                    "historical_percentile_beaten=%s matched_scored_time=%s score_time_delta_min=%s "
+                    "historical_top10_mean=%s historical_top10_median=%s historical_top10_std=%s "
+                    "gap_vs_historical_mean=%s gap_vs_historical_median=%s "
                     "http_latency=%s node_latency=%s shape=%s"
                 ),
                 run_config["asset"],
@@ -188,10 +220,12 @@ def run_rolling_backtest(
                 row["crps_3h"],
                 row["crps_24h"],
                 row["crps_path_price"],
-                _format_rank(latest_rank["rank"]),
-                latest_rank["miner_count"],
-                _format_rank(latest_rank["miners_beaten"]),
-                _format_percent(latest_rank["percentile_beaten"]),
+                _format_rank(historical_rank["rank"]),
+                historical_rank["miner_count"],
+                _format_rank(historical_rank["miners_beaten"]),
+                _format_percent(historical_rank["percentile_beaten"]),
+                historical_snapshot["scored_time"] if historical_snapshot else "n/a",
+                _format_float(historical_snapshot["delta_minutes"] if historical_snapshot else None),
                 _format_float(top10_stats["mean"]),
                 _format_float(top10_stats["median"]),
                 _format_float(top10_stats["std"]),
@@ -215,41 +249,17 @@ def run_rolling_backtest(
         raise RuntimeError("Backtest produced no scored origins.")
 
     result = _summarize_backtest(rows, run_config, sanity_rows)
-    result["top10_miner_crps_stats"] = top10_stats
-    result["latest_miner_snapshot"] = {
-        "valid_miner_count": len(latest_miner_scores),
-        "comparison_note": "latest Synth score snapshot, not same-origin historical miner scores",
+    result["historical_miner_snapshot"] = {
+        "score_snapshot_count": len(historical_scores),
+        "comparison_note": "per-origin nearest historical Synth score snapshots",
     }
     result["model"] = {
         "model_version": model_version,
         "model_entrypoint": model_entrypoint,
     }
-    result["reference_miners"] = _reference_miners(run_config)
-    result["miner_0_3_crps"] = [
-        {
-            "index": index,
-            "miner_uid": row["miner_uid"],
-            "crps": row["crps"],
-            "reward": row["reward"],
-            "scored_time": row["scored_time"],
-        }
-        for index, row in enumerate(result["reference_miners"][:4])
-    ]
-    result["summary"]["reference_miner_count"] = len(result["reference_miners"])
-    if result["reference_miners"]:
-        reference_crps = [float(row["crps"]) for row in result["reference_miners"]]
-        result["summary"]["top_reference_miner_crps"] = min(reference_crps)
-        result["summary"]["mean_reference_miner_crps"] = float(np.mean(reference_crps))
-        result["summary"]["our_mean_minus_top_reference"] = (
-            result["summary"]["raw_crps_mean"] - result["summary"]["top_reference_miner_crps"]
-        )
-        result["summary"]["our_median_minus_top_reference"] = (
-            result["summary"]["raw_crps_median"] - result["summary"]["top_reference_miner_crps"]
-        )
     output_dir = _save_backtest(rows, result, run_config)
     result["output_dir"] = str(output_dir)
     LOG.info("Completed rolling backtest: %s", result["summary"])
-    LOG.debug("Backtest reference miners: %s", result["reference_miners"])
     return result
 
 
@@ -469,27 +479,76 @@ def _latency_summary(values: list[float]) -> dict[str, float] | None:
     }
 
 
-def _reference_miners(config: dict) -> list[dict[str, Any]]:
-    try:
-        client = SynthClient(config)
-        scores = client.latest_scores()
-        leaderboard = client.latest_leaderboard()
-        return select_reference_miners(
-            scores,
-            leaderboard,
-            count=int(config["backtest"]["compare_miners"]),
-        )
-    except Exception as exc:  # noqa: BLE001 - backtest should still be useful without Synth.
-        LOG.warning("Could not fetch reference miners for backtest: %s", exc)
-        return []
+def _historical_miner_scores_for_origins(
+    config: dict,
+    origins: list[pd.Timestamp],
+    stride_minutes: int,
+) -> dict[pd.Timestamp, list[dict[str, Any]]]:
+    if not origins:
+        return {}
+    tolerance = pd.Timedelta(minutes=max(stride_minutes, 5))
+    start = _utc_timestamp(origins[0]) - tolerance
+    end = _utc_timestamp(origins[-1]) + tolerance
+    chunk_hours = float(config.get("backtest", {}).get("historical_score_chunk_hours", 24))
+    client = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90)))
+    rows: list[dict[str, Any]] = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + pd.Timedelta(hours=chunk_hours), end)
+        try:
+            chunk = client.historical_scores(start=cursor, end=chunk_end)
+            rows.extend(chunk)
+            LOG.debug(
+                "Fetched historical miner scores chunk start=%s end=%s rows=%s accumulated=%s",
+                cursor,
+                chunk_end,
+                len(chunk),
+                len(rows),
+            )
+        except Exception as exc:  # noqa: BLE001 - backtest can still run without miner comparison.
+            LOG.warning(
+                "Could not fetch historical miner scores chunk start=%s end=%s: %s",
+                cursor,
+                chunk_end,
+                exc,
+            )
+        cursor = chunk_end
+
+    grouped: dict[pd.Timestamp, list[dict[str, Any]]] = {}
+    for row in rows:
+        scored_time = row.get("scored_time")
+        if not scored_time:
+            continue
+        ts = _utc_timestamp(scored_time).floor("s")
+        grouped.setdefault(ts, []).append(row)
+    LOG.info(
+        "Historical miner score snapshots ready asset=%s snapshots=%s rows=%s first=%s last=%s",
+        config["asset"],
+        len(grouped),
+        len(rows),
+        min(grouped) if grouped else None,
+        max(grouped) if grouped else None,
+    )
+    return grouped
 
 
-def _latest_miner_scores(config: dict) -> list[dict[str, Any]]:
-    try:
-        return SynthClient(config).latest_scores()
-    except Exception as exc:  # noqa: BLE001 - backtest should continue without comparison stats.
-        LOG.warning("Could not fetch latest miner CRPS snapshot for backtest debug lines: %s", exc)
-        return []
+def _nearest_historical_miner_scores(
+    origin: pd.Timestamp,
+    snapshots: dict[pd.Timestamp, list[dict[str, Any]]],
+    tolerance: pd.Timedelta,
+) -> dict[str, Any] | None:
+    if not snapshots:
+        return None
+    origin_ts = _utc_timestamp(origin)
+    nearest = min(snapshots, key=lambda ts: abs(ts - origin_ts))
+    delta = abs(nearest - origin_ts)
+    if delta > tolerance:
+        return None
+    return {
+        "scored_time": str(nearest),
+        "delta_minutes": float(delta.total_seconds() / 60),
+        "scores": snapshots[nearest],
+    }
 
 
 def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:

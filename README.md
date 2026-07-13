@@ -740,7 +740,7 @@ cutoff: model data cutoff returned by the private node
 The green CRPS line is emitted after every origin is scored:
 
 ```text
-[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... latest_rank_estimate=1/256 latest_miners_beaten=255 latest_percentile_beaten=99.61% latest_top10_mean=... latest_top10_median=... latest_top10_std=... gap_vs_latest_mean=... gap_vs_latest_median=... http_latency=... node_latency=... shape=(250, 289)
+[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... historical_rank=12/244 historical_miners_beaten=232 historical_percentile_beaten=95.08% matched_scored_time=... score_time_delta_min=0.00 historical_top10_mean=... historical_top10_median=... historical_top10_std=... gap_vs_historical_mean=... gap_vs_historical_median=... http_latency=... node_latency=... shape=(250, 289)
 ```
 
 Fields:
@@ -748,29 +748,30 @@ Fields:
 ```text
 raw: combined Synth-style CRPS score
 5m / 30m / 3h / 24h / path: CRPS components
-latest_top10_mean / latest_top10_median / latest_top10_std: latest top-10 valid Synth miner CRPS statistics
-latest_rank_estimate: our estimated rank among valid miners in the latest Synth score snapshot
-latest_miners_beaten: count of valid latest miners with worse CRPS than ours
-latest_percentile_beaten: percentage of valid latest miners with worse CRPS than ours
-gap_vs_latest_mean: our raw CRPS minus latest top-10 mean CRPS
-gap_vs_latest_median: our raw CRPS minus latest top-10 median CRPS
+historical_top10_mean / historical_top10_median / historical_top10_std: top-10 valid Synth miner CRPS statistics from the matched historical score snapshot
+historical_rank: our estimated rank among valid miners in the matched historical score snapshot
+historical_miners_beaten: count of valid matched-time miners with worse CRPS than ours
+historical_percentile_beaten: percentage of valid matched-time miners with worse CRPS than ours
+matched_scored_time: historical Synth score snapshot used for comparison
+score_time_delta_min: absolute minutes between the backtest origin and matched_scored_time
+gap_vs_historical_mean: our raw CRPS minus matched historical top-10 mean CRPS
+gap_vs_historical_median: our raw CRPS minus matched historical top-10 median CRPS
 http_latency: public harness HTTP round-trip time for this forecast
 node_latency: private node total latency, if returned
 shape: returned forecast matrix shape, expected (num_paths, 289)
 ```
 
-The yellow top-miner summary is fetched once at the beginning of the backtest,
-so the debug loop does not call Synth on every origin:
+The yellow top-miner summary shows the first matched historical score snapshot:
 
 ```text
-[LATEST TOP10 MINERS] asset=BTC count=10 mean=... median=... std=... min=... max=... scored_time=...
+[HISTORICAL TOP10 MINERS] asset=BTC first_origin=... matched_scored_time=... delta_minutes=0.00 count=10 mean=... median=... std=... min=... max=...
 ```
 
-This is a latest-board comparison, not a same-origin historical miner
-comparison. It is useful as a rough scale check while a backtest is running.
-For exact historical comparison against top miners at each origin, fetch Synth
-historical scores for the same prompt/scored time and join them per origin.
-Invalid sentinel CRPS values such as `-1` are filtered out.
+Backtest miner comparison uses `/validation/scores/historical` over the
+backtest origin window, then matches each origin to the nearest historical
+`scored_time` within the origin stride tolerance. Invalid sentinel CRPS values
+such as `-1` are filtered out. If no historical snapshot is close enough, the
+comparison fields print `n/a` instead of falling back to latest scores.
 
 Smoke-test the debug lines with the private inference node:
 
@@ -803,21 +804,19 @@ raw_crps_median
 raw_crps_p25 / raw_crps_p75
 final_error_mean
 final_abs_error_median
-top_reference_miner_crps
-mean_reference_miner_crps
-our_mean_minus_top_reference
-our_median_minus_top_reference
-miner_0_3_crps
 ```
 
 For HTTP inference-node backtests, the saved `summary.json` also includes a
 `sanity` block with past-only cutoff checks, first-timestamp alignment, path
 shape checks, finite/positive path checks, latency summaries, and first/last
-origin diagnostics. It also includes `top10_miner_crps_stats` from the latest
-valid Synth score snapshot.
+origin diagnostics. It also includes `historical_miner_snapshot`, which reports
+how many historical Synth score snapshots were available for per-origin miner
+comparison.
 
-`miner_0_3_crps` is the compact comparison requested for the top four valid
-current Synth miners by CRPS, with reward context attached.
+The per-origin `rolling_results.csv` includes the matched historical miner
+comparison fields shown in the debug line, including `historical_rank`,
+`historical_miner_count`, `historical_top10_mean`, and
+`gap_vs_historical_mean`.
 
 CRPS components are scored on price changes in basis points, not raw dollar
 price changes. That keeps BTC, ETH, XAU, and other assets on the same unit

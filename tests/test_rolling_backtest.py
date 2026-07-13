@@ -90,7 +90,6 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
     original_extract_current_state = rolling.extract_current_state
 
     monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: source_bars)
-    monkeypatch.setattr(rolling, "_reference_miners", lambda _config: [])
     monkeypatch.setattr(rolling, "_save_backtest", lambda _rows, _result, _config: tmp_path / "saved")
 
     def audited_build_feature_frame(bars: pd.DataFrame, patched_config: dict) -> pd.DataFrame:
@@ -385,7 +384,16 @@ def test_rolling_backtest_uses_http_provider_when_endpoint_configured(monkeypatc
     monkeypatch.setattr(rolling, "load_forecast_provider", lambda _config: FakeProvider())
     monkeypatch.setattr(rolling, "load_forecast_model", fail_load_forecast_model)
     monkeypatch.setattr(rolling, "score_synth_btc_24h", fake_score)
-    monkeypatch.setattr(rolling, "_reference_miners", lambda _config: [])
+    monkeypatch.setattr(
+        rolling,
+        "_historical_miner_scores_for_origins",
+        lambda _config, _origins, _stride_minutes: {
+            origin: [
+                {"miner_uid": 1, "crps": 1.5, "scored_time": str(origin)},
+                {"miner_uid": 2, "crps": 3.0, "scored_time": str(origin)},
+            ]
+        },
+    )
 
     result = rolling.run_rolling_backtest(
         config,
@@ -408,3 +416,4 @@ def test_rolling_backtest_uses_http_provider_when_endpoint_configured(monkeypatc
         "model_entrypoint": "http://127.0.0.1:8088/predict",
     }
     assert result["first_rows"][0]["current_price"] == 104.0
+    assert result["historical_miner_snapshot"]["score_snapshot_count"] == 1
