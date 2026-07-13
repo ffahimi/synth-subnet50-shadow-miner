@@ -561,6 +561,7 @@ def test_fast_origins_bypasses_synth_score_origin_fetch(monkeypatch, tmp_path):
         "storage": {"backtest_dir": str(tmp_path / "backtests")},
     }
     selected_origin_sources = []
+    selected_max_origins = []
 
     class FakeProvider:
         def generate(self, run_config, prompt_start_time=None, origin=None):
@@ -581,6 +582,7 @@ def test_fast_origins_bypasses_synth_score_origin_fetch(monkeypatch, tmp_path):
         _score_snapshot_cache,
     ):
         selected_origin_sources.append(origin_source)
+        selected_max_origins.append(_max_origins)
         return [origin]
 
     def fail_historical_rows(*_args, **_kwargs):
@@ -610,6 +612,7 @@ def test_fast_origins_bypasses_synth_score_origin_fetch(monkeypatch, tmp_path):
     result = rolling.run_rolling_backtest(config, compare_miners=0, fast_origins=True)
 
     assert selected_origin_sources == ["polygon"]
+    assert selected_max_origins == [24]
     assert result["summary"]["origin_count"] == 1
 
 

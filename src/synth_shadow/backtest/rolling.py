@@ -1039,7 +1039,7 @@ def _selection_max_origins(
     realized_source: str,
     config: dict,
 ) -> int | None:
-    if max_origins is None or origin_source != "synth" or realized_source != "synth":
+    if max_origins is None or realized_source != "synth":
         return max_origins
     multiplier = int(config.get("backtest", {}).get("synth_realized_scan_multiplier", 24))
     return max(max_origins, max_origins * max(1, multiplier))
