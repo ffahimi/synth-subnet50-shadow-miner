@@ -44,6 +44,7 @@ def run_rolling_backtest(
     stride_minutes: int | None = None,
     max_origins: int | None = None,
     num_paths: int | None = None,
+    compare_miners: int | None = None,
     realized_source: str | None = None,
     origin_source: str | None = None,
     maturity_lag_minutes: float | None = None,
@@ -68,6 +69,8 @@ def run_rolling_backtest(
     run_config["backtest"]["stride_minutes"] = stride_minutes
     run_config["backtest"]["max_origins"] = max_origins
     run_config["forecast"]["num_paths"] = num_paths
+    if compare_miners is not None:
+        run_config["backtest"]["compare_miners"] = int(compare_miners)
     if realized_source is not None:
         run_config["backtest"]["realized_source"] = realized_source
     if origin_source is not None:
@@ -134,12 +137,19 @@ def run_rolling_backtest(
     model = None if provider else load_forecast_model(run_config)
     model_version = "http_provider" if provider else str(getattr(model, "model_version", model.__class__.__name__))
     model_entrypoint = endpoint if provider else configured_model_entrypoint(run_config)
-    historical_scores = _historical_miner_scores_for_origins(
-        run_config,
-        origins,
-        stride_minutes,
-        cached_snapshots=score_snapshot_cache.get("snapshots"),
+    compare_miner_count = int(run_config["backtest"].get("compare_miners") or 0)
+    historical_scores = (
+        _historical_miner_scores_for_origins(
+            run_config,
+            origins,
+            stride_minutes,
+            cached_snapshots=score_snapshot_cache.get("snapshots"),
+        )
+        if compare_miner_count > 0
+        else {}
     )
+    if compare_miner_count <= 0:
+        LOG.info("Skipping historical miner score fetch because backtest.compare_miners=%s", compare_miner_count)
     if historical_scores:
         first_snapshot = _nearest_historical_miner_scores(
             origins[0],
@@ -250,7 +260,7 @@ def run_rolling_backtest(
                 config=run_config,
             )
             miner_scores_at_origin = historical_snapshot["scores"] if historical_snapshot else []
-            top10_stats = top_miner_crps_stats(miner_scores_at_origin, count=10)
+            top10_stats = top_miner_crps_stats(miner_scores_at_origin, count=max(compare_miner_count, 10))
             historical_rank = rank_against_miners(row["raw_crps"], miner_scores_at_origin)
             row.update(_origin_diagnostics(origin, past_features, realized, miner_scores_at_origin, top10_stats))
             row.update(

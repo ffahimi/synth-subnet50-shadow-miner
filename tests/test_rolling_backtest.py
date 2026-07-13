@@ -123,6 +123,7 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         max_origins: int | None,
         origin_source: str = "polygon",
         realized_source: str = "polygon",
+        score_snapshot_cache: dict | None = None,
     ) -> list[pd.Timestamp]:
         candidates = original_select_origins(
             features,
@@ -132,6 +133,7 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
             None,
             origin_source,
             realized_source,
+            score_snapshot_cache,
         )
         assert len(candidates) >= origins_to_score
         max_start = len(candidates) - origins_to_score
@@ -435,6 +437,86 @@ def test_rolling_backtest_uses_http_provider_when_endpoint_configured(monkeypatc
     assert result["first_rows"][0]["current_price"] == 104.0
     assert result["first_rows"][0]["realized_source"] == "polygon"
     assert result["historical_miner_snapshot"]["score_snapshot_count"] == 1
+
+
+def test_rolling_backtest_can_skip_historical_miner_fetch(monkeypatch, tmp_path):
+    origin = pd.Timestamp("2026-07-10T03:00:00Z")
+    interval_seconds = 300
+    horizon_seconds = 600
+    timestamps = pd.date_range(origin - pd.Timedelta(minutes=20), periods=8, freq="300s", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(99.0, 106.0, len(timestamps)),
+            "high": np.linspace(100.0, 107.0, len(timestamps)),
+            "low": np.linspace(98.0, 105.0, len(timestamps)),
+            "close": np.linspace(100.0, 107.0, len(timestamps)),
+            "volume": np.ones(len(timestamps)),
+        }
+    )
+    features = pd.DataFrame({"timestamp": timestamps})
+    config = {
+        "asset": "BTC",
+        "polygon_ticker": "X:BTCUSD",
+        "history": {"lookback_days": 1},
+        "forecast": {
+            "horizon_seconds": horizon_seconds,
+            "interval_seconds": interval_seconds,
+            "num_paths": 2,
+            "random_seed": 7,
+        },
+        "sampling": {"block_minutes": 60},
+        "model": {"endpoint": "http://127.0.0.1:8088/predict"},
+        "backtest": {
+            "days": 1,
+            "stride_minutes": 5,
+            "max_origins": 1,
+            "num_paths": 2,
+            "compare_miners": 0,
+            "realized_source": "polygon",
+        },
+        "storage": {"backtest_dir": str(tmp_path / "backtests")},
+    }
+
+    class FakeProvider:
+        def generate(self, run_config, prompt_start_time=None, origin=None):
+            paths = np.array([[104.0, 105.0, 106.0], [104.0, 103.0, 102.0]])
+            return ProviderForecast(
+                paths=paths,
+                timestamps=pd.date_range(origin, periods=3, freq="300s", tz="UTC"),
+                metadata={
+                    "provider": "http",
+                    "model_version": "private_http_backtest_v1",
+                    "model_entrypoint": "http://127.0.0.1:8088/predict",
+                    "data_cutoff": str(origin),
+                    "current_price": 104.0,
+                },
+            )
+
+    def fail_historical_fetch(*_args, **_kwargs):
+        raise AssertionError("compare_miners=0 should skip Synth historical score fetches")
+
+    monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: bars)
+    monkeypatch.setattr(rolling, "build_feature_frame", lambda _bars, _config: features)
+    monkeypatch.setattr(rolling, "_select_origins", lambda *_args: [origin])
+    monkeypatch.setattr(rolling, "load_forecast_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(rolling, "_historical_miner_scores_for_origins", fail_historical_fetch)
+    monkeypatch.setattr(rolling, "score_synth_btc_24h", lambda _paths, _realized: {
+        "raw_crps": 2.0,
+        "components": {
+            "crps_5m": 0.1,
+            "crps_30m": 0.2,
+            "crps_3h": 0.3,
+            "crps_24h": 0.4,
+            "crps_path_price": 0.5,
+        },
+    })
+
+    result = rolling.run_rolling_backtest(config, compare_miners=0)
+
+    assert result["summary"]["origin_count"] == 1
+    assert result["historical_miner_snapshot"]["score_snapshot_count"] == 0
+    assert result["first_rows"][0]["historical_miner_count"] == 0
 
 
 def test_synth_realized_source_loads_realized_path(monkeypatch):

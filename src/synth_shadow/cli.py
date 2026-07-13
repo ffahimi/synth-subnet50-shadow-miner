@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backtest-max-origins", type=int, help="Limit backtest origins for quick checks.")
     parser.add_argument("--backtest-num-paths", type=int, help="Override simulated paths per backtest origin.")
     parser.add_argument(
+        "--backtest-compare-miners",
+        type=int,
+        help="Number of historical miners to compare against; use 0 to skip Synth score fetches.",
+    )
+    parser.add_argument(
         "--backtest-realized-source",
         choices=["polygon", "synth"],
         help="Realized path source for rolling backtest scoring.",
@@ -118,6 +123,7 @@ def main() -> None:
             stride_minutes=args.backtest_stride_minutes,
             max_origins=args.backtest_max_origins,
             num_paths=args.backtest_num_paths,
+            compare_miners=args.backtest_compare_miners,
             realized_source=args.backtest_realized_source,
             origin_source=args.backtest_origin_source,
             maturity_lag_minutes=args.backtest_maturity_lag_minutes,
