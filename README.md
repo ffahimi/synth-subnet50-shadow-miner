@@ -590,6 +590,17 @@ The public harness does not inspect private feature vectors in HTTP mode. The
 private node should include its own diagnostics, for example raw 1m row count,
 feature row count, data cutoff, nearest-neighbor count, and model latency.
 
+When a live forecast later matures and `score-matured --debug` or
+`run-synth-shadow-sanity --debug` scores it, the scorer prints a green line:
+
+```text
+[LIVE CRPS] asset=BTC prompt_start=... raw=... 5m=... 30m=... 3h=... 24h=... path=... top10_mean=... top10_median=... top10_std=... gap_mean=... gap_median=... http_latency=... node_latency=... forecast_dir=...
+```
+
+`http_latency` and `node_latency` come from the forecast metadata saved at
+generation time. They are available for HTTP inference-node forecasts because
+the provider persists endpoint diagnostics into `metadata.json`.
+
 ## CRPS And Reward Benchmarks
 
 Run:
@@ -705,6 +716,76 @@ synth-shadow backtest-rolling \
   --backtest-stride-minutes 60
 ```
 
+### Colored Debug Lines
+
+When `--debug` is enabled, backtests print colored checkpoint lines for each
+HTTP forecast and each scored origin.
+
+The cyan HTTP line is emitted after every private inference-node response:
+
+```text
+[HTTP FORECAST] asset=BTC prompt_start=... origin=... latency=0.842s node_total=0.731s paths=250 points=289 cutoff=...
+```
+
+Fields:
+
+```text
+latency: total public harness HTTP round-trip time
+node_total: private inference-node latency, if returned in diagnostics.latency_seconds.total
+paths: number of returned forecast paths
+points: points per path, expected 289 for 24h at 5-minute resolution
+cutoff: model data cutoff returned by the private node
+```
+
+The green CRPS line is emitted after every origin is scored:
+
+```text
+[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... top10_mean=... top10_median=... top10_std=... gap_mean=... gap_median=... http_latency=... node_latency=... shape=(250, 289)
+```
+
+Fields:
+
+```text
+raw: combined Synth-style CRPS score
+5m / 30m / 3h / 24h / path: CRPS components
+top10_mean / top10_median / top10_std: latest top-10 valid Synth miner CRPS statistics
+gap_mean: our raw CRPS minus top-10 mean CRPS
+gap_median: our raw CRPS minus top-10 median CRPS
+http_latency: public harness HTTP round-trip time for this forecast
+node_latency: private node total latency, if returned
+shape: returned forecast matrix shape, expected (num_paths, 289)
+```
+
+The yellow top-miner summary is fetched once at the beginning of the backtest,
+so the debug loop does not call Synth on every origin:
+
+```text
+[TOP10 MINERS] asset=BTC count=10 mean=... median=... std=... min=... max=... scored_time=...
+```
+
+Smoke-test the debug lines with the private inference node:
+
+```bash
+export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
+
+synth-shadow backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-max-origins 3 \
+  --backtest-num-paths 16
+```
+
+For a wider but still practical 2026-to-date sanity run, use hourly origins:
+
+```bash
+synth-shadow backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-days 193 \
+  --backtest-stride-minutes 60 \
+  --backtest-num-paths 250
+```
+
 The backtest summary includes:
 
 ```text
@@ -719,6 +800,12 @@ our_mean_minus_top_reference
 our_median_minus_top_reference
 miner_0_3_crps
 ```
+
+For HTTP inference-node backtests, the saved `summary.json` also includes a
+`sanity` block with past-only cutoff checks, first-timestamp alignment, path
+shape checks, finite/positive path checks, latency summaries, and first/last
+origin diagnostics. It also includes `top10_miner_crps_stats` from the latest
+valid Synth score snapshot.
 
 `miner_0_3_crps` is the compact comparison requested for the top four valid
 current Synth miners by CRPS, with reward context attached.
