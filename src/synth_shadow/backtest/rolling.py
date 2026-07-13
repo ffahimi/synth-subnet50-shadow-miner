@@ -417,7 +417,7 @@ def _select_origins(
 ) -> list[pd.Timestamp]:
     horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
     latest_matured_origin = features["timestamp"].max() - horizon
-    if origin_source == "synth":
+    if origin_source == "synth" or realized_source == "synth":
         latest_matured_origin -= _maturity_lag(config)
     first_origin = latest_matured_origin - pd.Timedelta(days=days)
     if origin_source == "synth" and realized_source == "synth":

@@ -810,6 +810,37 @@ def test_synth_origin_source_uses_official_prompt_times(monkeypatch):
     ]
 
 
+def test_polygon_fast_origins_apply_synth_realized_maturity_lag():
+    feature_times = pd.date_range(
+        "2026-07-10T02:00:00Z",
+        periods=25,
+        freq="300s",
+        tz="UTC",
+    )
+    features = pd.DataFrame({"timestamp": feature_times})
+    config = {
+        "asset": "BTC",
+        "backtest": {"maturity_lag_minutes": 30},
+        "forecast": {"horizon_seconds": 600, "interval_seconds": 300},
+    }
+
+    origins = rolling._select_origins(
+        features,
+        config,
+        days=1 / 24,
+        stride_minutes=5,
+        max_origins=3,
+        origin_source="polygon",
+        realized_source="synth",
+    )
+
+    assert origins == [
+        pd.Timestamp("2026-07-10T03:10:00Z"),
+        pd.Timestamp("2026-07-10T03:15:00Z"),
+        pd.Timestamp("2026-07-10T03:20:00Z"),
+    ]
+
+
 def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatch):
     feature_times = pd.date_range(
         "2026-07-10T02:00:00Z",

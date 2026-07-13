@@ -791,6 +791,7 @@ synth-shadow backtest-rolling \
   --backtest-origin-source synth \
   --backtest-realized-source synth \
   --backtest-fast-origins \
+  --backtest-maturity-lag-minutes 90 \
   --backtest-max-origins 3 \
   --backtest-num-paths 16 \
   --backtest-compare-miners 0
