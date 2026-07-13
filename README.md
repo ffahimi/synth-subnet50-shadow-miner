@@ -727,6 +727,42 @@ CRPS components are scored on price changes in basis points, not raw dollar
 price changes. That keeps BTC, ETH, XAU, and other assets on the same unit
 scale, matching Synth's documented scoring methodology.
 
+## Top Miner Regime Research
+
+The repo includes repeatable research tooling for studying whether persistent
+Synth leaders perform better or worse across volatility, direction, trend, and
+session regimes.
+
+Research note:
+
+```text
+docs/top_miners_regime_research.md
+```
+
+Run the default 90-day BTC/ETH study:
+
+```bash
+export POLYGON_API_KEY=your_polygon_key_here
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --days 90 \
+  --assets BTC ETH \
+  --top-n 25
+```
+
+Run a longer study:
+
+```bash
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --days 180 \
+  --assets BTC ETH \
+  --top-n 25 \
+  --output-dir data/reports/top_miners_research_180d
+```
+
+Outputs are written under `data/reports/...`, which is ignored by Git. The
+script writes daily miner CRPS, top-N persistence, Polygon-derived daily/session
+regimes, and performance tables by regime.
+
 ## Output Files
 
 ```text
