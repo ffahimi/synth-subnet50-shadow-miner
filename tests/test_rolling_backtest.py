@@ -842,6 +842,77 @@ def test_historical_miner_scores_reuse_cached_snapshots(monkeypatch):
     assert grouped == {pd.Timestamp("2026-07-10T03:10:00Z"): [{"miner_uid": 1, "crps": 10.0}]}
 
 
+def test_historical_miner_score_match_uses_same_day_fallback():
+    config = {
+        "forecast": {"horizon_seconds": 86400},
+        "backtest": {"historical_score_tolerance_minutes": 30},
+    }
+    origin = pd.Timestamp("2026-07-12T17:05:00Z")
+    snapshots = {
+        pd.Timestamp("2026-07-13T16:45:00Z"): [{"miner_uid": 1, "crps": 100.0}],
+        pd.Timestamp("2026-07-13T08:00:00Z"): [{"miner_uid": 2, "crps": 200.0}],
+        pd.Timestamp("2026-07-14T17:05:00Z"): [{"miner_uid": 3, "crps": 300.0}],
+    }
+
+    matched = rolling._nearest_historical_miner_scores(
+        origin,
+        snapshots,
+        tolerance=pd.Timedelta(minutes=10),
+        config=config,
+    )
+
+    assert matched is not None
+    assert matched["target_scored_time"] == "2026-07-13 17:05:00+00:00"
+    assert matched["scored_time"] == "2026-07-13 16:45:00+00:00"
+    assert matched["delta_minutes"] == 20.0
+    assert matched["match_type"] == "same_day"
+    assert matched["scores"] == [{"miner_uid": 1, "crps": 100.0}]
+
+
+def test_historical_miner_score_match_prefers_tolerance_match():
+    config = {
+        "forecast": {"horizon_seconds": 86400},
+        "backtest": {"historical_score_tolerance_minutes": 30},
+    }
+    origin = pd.Timestamp("2026-07-12T17:05:00Z")
+    snapshots = {
+        pd.Timestamp("2026-07-13T17:00:00Z"): [{"miner_uid": 1, "crps": 100.0}],
+        pd.Timestamp("2026-07-13T16:45:00Z"): [{"miner_uid": 2, "crps": 200.0}],
+    }
+
+    matched = rolling._nearest_historical_miner_scores(
+        origin,
+        snapshots,
+        tolerance=pd.Timedelta(minutes=10),
+        config=config,
+    )
+
+    assert matched is not None
+    assert matched["scored_time"] == "2026-07-13 17:00:00+00:00"
+    assert matched["delta_minutes"] == 5.0
+    assert matched["match_type"] == "nearest_tolerance"
+
+
+def test_historical_miner_score_match_rejects_different_day():
+    config = {
+        "forecast": {"horizon_seconds": 86400},
+        "backtest": {"historical_score_tolerance_minutes": 30},
+    }
+    origin = pd.Timestamp("2026-07-12T17:05:00Z")
+    snapshots = {
+        pd.Timestamp("2026-07-14T17:05:00Z"): [{"miner_uid": 3, "crps": 300.0}],
+    }
+
+    matched = rolling._nearest_historical_miner_scores(
+        origin,
+        snapshots,
+        tolerance=pd.Timedelta(minutes=10),
+        config=config,
+    )
+
+    assert matched is None
+
+
 def test_backtest_summary_includes_relevance_statistics():
     rows = [
         {

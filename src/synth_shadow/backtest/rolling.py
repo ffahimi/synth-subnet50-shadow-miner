@@ -274,6 +274,7 @@ def run_rolling_backtest(
                     else str(_score_match_time(origin, run_config)),
                     "matched_scored_time": historical_snapshot["scored_time"] if historical_snapshot else None,
                     "score_time_delta_min": historical_snapshot["delta_minutes"] if historical_snapshot else None,
+                    "score_match_type": historical_snapshot["match_type"] if historical_snapshot else None,
                     "historical_top10_mean": top10_stats["mean"],
                     "historical_top10_median": top10_stats["median"],
                     "historical_top10_std": top10_stats["std"],
@@ -289,7 +290,7 @@ def run_rolling_backtest(
                     "[BACKTEST CRPS] asset=%s origin=%s raw=%.6f "
                     "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
                     "historical_rank=%s/%s historical_miners_beaten=%s "
-                    "historical_percentile_beaten=%s target_scored_time=%s matched_scored_time=%s score_time_delta_min=%s "
+                    "historical_percentile_beaten=%s target_scored_time=%s matched_scored_time=%s score_time_delta_min=%s score_match_type=%s "
                     "historical_top10_mean=%s historical_top10_median=%s historical_top10_std=%s "
                     "gap_vs_historical_mean=%s gap_vs_historical_median=%s "
                     "http_latency=%s node_latency=%s shape=%s"
@@ -309,6 +310,7 @@ def run_rolling_backtest(
                 historical_snapshot["target_scored_time"] if historical_snapshot else str(_score_match_time(origin, run_config)),
                 historical_snapshot["scored_time"] if historical_snapshot else "n/a",
                 _format_float(historical_snapshot["delta_minutes"] if historical_snapshot else None),
+                historical_snapshot["match_type"] if historical_snapshot else "n/a",
                 _format_float(top10_stats["mean"]),
                 _format_float(top10_stats["median"]),
                 _format_float(top10_stats["std"]),
@@ -986,12 +988,19 @@ def _nearest_historical_miner_scores(
     target = _score_match_time(origin, config) if config else _utc_timestamp(origin)
     nearest = min(snapshots, key=lambda ts: abs(ts - target))
     delta = abs(nearest - target)
+    match_type = "nearest_tolerance"
     if delta > tolerance:
-        return None
+        same_day = [ts for ts in snapshots if ts.date() == target.date()]
+        if not same_day:
+            return None
+        nearest = min(same_day, key=lambda ts: abs(ts - target))
+        delta = abs(nearest - target)
+        match_type = "same_day"
     return {
         "target_scored_time": str(target),
         "scored_time": str(nearest),
         "delta_minutes": float(delta.total_seconds() / 60),
+        "match_type": match_type,
         "scores": snapshots[nearest],
     }
 

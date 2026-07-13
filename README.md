@@ -788,6 +788,7 @@ historical_percentile_beaten: percentage of valid matched-time miners with worse
 target_scored_time: expected miner score time, computed as origin + 24h horizon
 matched_scored_time: historical Synth score snapshot used for comparison
 score_time_delta_min: absolute minutes between target_scored_time and matched_scored_time
+score_match_type: nearest_tolerance for a close timestamp match, same_day for the nearest snapshot on the target score date
 gap_vs_historical_mean: our raw CRPS minus matched historical top-10 mean CRPS
 gap_vs_historical_median: our raw CRPS minus matched historical top-10 median CRPS
 http_latency: public harness HTTP round-trip time for this forecast
@@ -806,10 +807,13 @@ expected score window. For each origin, the expected score time is
 `origin + forecast.horizon_seconds`, so a 24h forecast starting at
 `2026-07-12T17:00Z` is matched against miner scores near
 `2026-07-13T17:00Z`. The default match tolerance is
-`backtest.historical_score_tolerance_minutes`, currently 30 minutes. Invalid
-sentinel CRPS values such as `-1` are filtered out. If no historical snapshot is
-close enough, the comparison fields print `n/a` instead of falling back to
-latest scores.
+`backtest.historical_score_tolerance_minutes`, currently 30 minutes. If no
+snapshot is close enough but Synth has a score snapshot on the same target score
+date, the backtest uses the nearest same-day snapshot and labels it
+`score_match_type=same_day`. Invalid sentinel CRPS values such as `-1` are
+filtered out. If no historical snapshot exists on the target score date, the
+comparison fields print `n/a` instead of falling back to unrelated latest
+scores.
 
 Smoke-test the debug lines with the private inference node:
 
