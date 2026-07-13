@@ -101,6 +101,7 @@ def run_rolling_backtest(
         stride_minutes,
         selection_max_origins,
         origin_source,
+        realized_source,
     )
     if max_origins is not None and origin_source == "synth" and realized_source == "synth":
         origins = list(reversed(origins))
@@ -346,13 +347,21 @@ def _select_origins(
     stride_minutes: int,
     max_origins: int | None,
     origin_source: str = "polygon",
+    realized_source: str = "polygon",
 ) -> list[pd.Timestamp]:
     horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
     latest_matured_origin = features["timestamp"].max() - horizon
     if origin_source == "synth":
         latest_matured_origin -= _maturity_lag(config)
     first_origin = latest_matured_origin - pd.Timedelta(days=days)
-    if origin_source == "synth":
+    if origin_source == "synth" and realized_source == "synth":
+        origins = _select_synth_score_origins(
+            features,
+            config,
+            first_origin,
+            latest_matured_origin,
+        )
+    elif origin_source == "synth":
         origins = _select_synth_prompt_origins(
             features,
             config,
@@ -369,6 +378,43 @@ def _select_origins(
     if max_origins is not None:
         origins = origins[-max_origins:]
     return [pd.Timestamp(origin) for origin in origins]
+
+
+def _select_synth_score_origins(
+    features: pd.DataFrame,
+    config: dict,
+    first_origin: pd.Timestamp,
+    latest_matured_origin: pd.Timestamp,
+) -> list[pd.Timestamp]:
+    horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
+    tolerance = _historical_score_tolerance(config, int(config["backtest"]["stride_minutes"]))
+    start = first_origin + horizon - tolerance
+    end = latest_matured_origin + horizon + tolerance
+    rows = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90))).historical_scores(
+        start=start,
+        end=end,
+    )
+    earliest_feature = features["timestamp"].min()
+    origins_by_time: dict[pd.Timestamp, pd.Timestamp] = {}
+    for row in rows:
+        scored_time = _score_time(row)
+        if scored_time is None:
+            continue
+        origin = scored_time - horizon
+        if first_origin <= origin <= latest_matured_origin and earliest_feature <= origin:
+            origins_by_time[origin] = origin
+    origins = sorted(origins_by_time)
+    LOG.info(
+        (
+            "Selected Synth score origins score_rows=%s usable_snapshots=%s "
+            "first_origin=%s latest_matured_origin=%s"
+        ),
+        len(rows),
+        len(origins),
+        first_origin,
+        latest_matured_origin,
+    )
+    return origins
 
 
 def _select_synth_prompt_origins(
@@ -634,10 +680,9 @@ def _historical_miner_scores_for_origins(
 
     grouped: dict[pd.Timestamp, list[dict[str, Any]]] = {}
     for row in rows:
-        scored_time = row.get("scored_time")
-        if not scored_time:
+        ts = _score_time(row)
+        if ts is None:
             continue
-        ts = _utc_timestamp(scored_time).floor("s")
         grouped.setdefault(ts, []).append(row)
     LOG.info(
         "Historical miner score snapshots ready asset=%s snapshots=%s rows=%s first=%s last=%s",
@@ -648,6 +693,13 @@ def _historical_miner_scores_for_origins(
         max(grouped) if grouped else None,
     )
     return grouped
+
+
+def _score_time(row: dict[str, Any]) -> pd.Timestamp | None:
+    value = row.get("scored_time") or row.get("score_time") or row.get("timestamp")
+    if not value:
+        return None
+    return _utc_timestamp(value).floor("s")
 
 
 def _nearest_historical_miner_scores(

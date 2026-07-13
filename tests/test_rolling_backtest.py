@@ -119,8 +119,18 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         days: float,
         stride: int,
         max_origins: int | None,
+        origin_source: str = "polygon",
+        realized_source: str = "polygon",
     ) -> list[pd.Timestamp]:
-        candidates = original_select_origins(features, patched_config, days, stride, None)
+        candidates = original_select_origins(
+            features,
+            patched_config,
+            days,
+            stride,
+            None,
+            origin_source,
+            realized_source,
+        )
         assert len(candidates) >= origins_to_score
         max_start = len(candidates) - origins_to_score
         start = random.Random(sample_seed).randint(0, max_start)
@@ -529,7 +539,15 @@ def test_synth_backtest_skips_unavailable_realized_before_provider(monkeypatch, 
             assert start_time == "2026-07-10T03:00:00Z"
             return {"real_prices": [104.0, 105.0, 106.0]}
 
-    def fake_select_origins(_features, _config, _days, _stride, selection_max, _origin_source):
+    def fake_select_origins(
+        _features,
+        _config,
+        _days,
+        _stride,
+        selection_max,
+        _origin_source,
+        _realized_source,
+    ):
         assert selection_max == 24
         return [older_origin, newer_origin]
 
@@ -609,4 +627,57 @@ def test_synth_origin_source_uses_official_prompt_times(monkeypatch):
     assert origins == [
         pd.Timestamp("2026-07-10T03:01:00Z"),
         pd.Timestamp("2026-07-10T03:06:00Z"),
+    ]
+
+
+def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatch):
+    feature_times = pd.date_range(
+        "2026-07-10T02:00:00Z",
+        periods=19,
+        freq="300s",
+        tz="UTC",
+    )
+    features = pd.DataFrame({"timestamp": feature_times})
+    config = {
+        "asset": "BTC",
+        "backtest": {
+            "maturity_lag_minutes": 0,
+            "stride_minutes": 5,
+            "historical_score_tolerance_minutes": 30,
+        },
+        "forecast": {"horizon_seconds": 600, "interval_seconds": 300},
+        "synth": {"timeout_seconds": 90},
+    }
+    score_windows = []
+
+    class FakeSynthClient:
+        def __init__(self, client_config, timeout_seconds=30):
+            assert client_config is config
+            assert timeout_seconds == 90
+
+        def historical_scores(self, start=None, end=None):
+            score_windows.append((start, end))
+            return [
+                {"miner_uid": 1, "crps": 10.0, "scored_time": "2026-07-10T02:35:00Z"},
+                {"miner_uid": 2, "crps": 11.0, "scored_time": "2026-07-10T02:35:00Z"},
+                {"miner_uid": 1, "crps": 9.0, "scored_time": "2026-07-10T03:20:00Z"},
+                {"miner_uid": 1, "crps": 8.0, "scored_time": "2026-07-10T03:45:00Z"},
+            ]
+
+    monkeypatch.setattr(rolling, "SynthClient", FakeSynthClient)
+
+    origins = rolling._select_origins(
+        features,
+        config,
+        days=1 / 24,
+        stride_minutes=5,
+        max_origins=None,
+        origin_source="synth",
+        realized_source="synth",
+    )
+
+    assert len(score_windows) == 1
+    assert origins == [
+        pd.Timestamp("2026-07-10T02:25:00Z"),
+        pd.Timestamp("2026-07-10T03:10:00Z"),
     ]
