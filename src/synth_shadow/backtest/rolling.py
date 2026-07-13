@@ -101,6 +101,7 @@ def run_rolling_backtest(
     interval_seconds = int(run_config["forecast"]["interval_seconds"])
     features = build_feature_frame(bars, run_config)
     selection_max_origins = _selection_max_origins(max_origins, origin_source, realized_source, run_config)
+    score_snapshot_cache: dict[str, Any] = {}
     origins = _select_origins(
         features,
         run_config,
@@ -109,6 +110,7 @@ def run_rolling_backtest(
         selection_max_origins,
         origin_source,
         realized_source,
+        score_snapshot_cache,
     )
     if max_origins is not None and origin_source == "synth" and realized_source == "synth":
         origins = list(reversed(origins))
@@ -132,7 +134,12 @@ def run_rolling_backtest(
     model = None if provider else load_forecast_model(run_config)
     model_version = "http_provider" if provider else str(getattr(model, "model_version", model.__class__.__name__))
     model_entrypoint = endpoint if provider else configured_model_entrypoint(run_config)
-    historical_scores = _historical_miner_scores_for_origins(run_config, origins, stride_minutes)
+    historical_scores = _historical_miner_scores_for_origins(
+        run_config,
+        origins,
+        stride_minutes,
+        cached_snapshots=score_snapshot_cache.get("snapshots"),
+    )
     if historical_scores:
         first_snapshot = _nearest_historical_miner_scores(
             origins[0],
@@ -383,6 +390,7 @@ def _select_origins(
     max_origins: int | None,
     origin_source: str = "polygon",
     realized_source: str = "polygon",
+    score_snapshot_cache: dict[str, Any] | None = None,
 ) -> list[pd.Timestamp]:
     horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
     latest_matured_origin = features["timestamp"].max() - horizon
@@ -395,6 +403,7 @@ def _select_origins(
             config,
             first_origin,
             latest_matured_origin,
+            score_snapshot_cache,
         )
     elif origin_source == "synth":
         origins = _select_synth_prompt_origins(
@@ -420,18 +429,20 @@ def _select_synth_score_origins(
     config: dict,
     first_origin: pd.Timestamp,
     latest_matured_origin: pd.Timestamp,
+    score_snapshot_cache: dict[str, Any] | None = None,
 ) -> list[pd.Timestamp]:
     horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
     tolerance = _historical_score_tolerance(config, int(config["backtest"]["stride_minutes"]))
     start = first_origin + horizon - tolerance
     end = latest_matured_origin + horizon + tolerance
     rows = _fetch_historical_score_rows(config, start, end, context="origin selection")
+    snapshots = _group_score_rows(rows)
+    if score_snapshot_cache is not None:
+        score_snapshot_cache["snapshots"] = snapshots
+        score_snapshot_cache["rows"] = len(rows)
     earliest_feature = features["timestamp"].min()
     origins_by_time: dict[pd.Timestamp, pd.Timestamp] = {}
-    for row in rows:
-        scored_time = _score_time(row)
-        if scored_time is None:
-            continue
+    for scored_time in snapshots:
         origin = scored_time - horizon
         if first_origin <= origin <= latest_matured_origin and earliest_feature <= origin:
             origins_by_time[origin] = origin
@@ -862,6 +873,7 @@ def _historical_miner_scores_for_origins(
     config: dict,
     origins: list[pd.Timestamp],
     stride_minutes: int,
+    cached_snapshots: dict[pd.Timestamp, list[dict[str, Any]]] | None = None,
 ) -> dict[pd.Timestamp, list[dict[str, Any]]]:
     if not origins:
         return {}
@@ -869,14 +881,26 @@ def _historical_miner_scores_for_origins(
     scored_times = [_score_match_time(origin, config) for origin in origins]
     start = min(scored_times) - tolerance
     end = max(scored_times) + tolerance
+    if cached_snapshots is not None:
+        grouped = {
+            ts: scores
+            for ts, scores in cached_snapshots.items()
+            if start <= ts <= end
+        }
+        LOG.info(
+            (
+                "Reusing cached historical miner score snapshots asset=%s "
+                "snapshots=%s rows=%s first=%s last=%s"
+            ),
+            config["asset"],
+            len(grouped),
+            sum(len(scores) for scores in grouped.values()),
+            min(grouped) if grouped else None,
+            max(grouped) if grouped else None,
+        )
+        return grouped
     rows = _fetch_historical_score_rows(config, start, end, context="miner comparison")
-
-    grouped: dict[pd.Timestamp, list[dict[str, Any]]] = {}
-    for row in rows:
-        ts = _score_time(row)
-        if ts is None:
-            continue
-        grouped.setdefault(ts, []).append(row)
+    grouped = _group_score_rows(rows)
     LOG.info(
         "Historical miner score snapshots ready asset=%s snapshots=%s rows=%s first=%s last=%s",
         config["asset"],
@@ -885,6 +909,16 @@ def _historical_miner_scores_for_origins(
         min(grouped) if grouped else None,
         max(grouped) if grouped else None,
     )
+    return grouped
+
+
+def _group_score_rows(rows: list[dict[str, Any]]) -> dict[pd.Timestamp, list[dict[str, Any]]]:
+    grouped: dict[pd.Timestamp, list[dict[str, Any]]] = {}
+    for row in rows:
+        ts = _score_time(row)
+        if ts is None:
+            continue
+        grouped.setdefault(ts, []).append(row)
     return grouped
 
 

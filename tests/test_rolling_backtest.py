@@ -404,7 +404,7 @@ def test_rolling_backtest_uses_http_provider_when_endpoint_configured(monkeypatc
     monkeypatch.setattr(
         rolling,
         "_historical_miner_scores_for_origins",
-        lambda _config, _origins, _stride_minutes: {
+        lambda _config, _origins, _stride_minutes, **_kwargs: {
             origin: [
                 {"miner_uid": 1, "crps": 1.5, "scored_time": str(origin)},
                 {"miner_uid": 2, "crps": 3.0, "scored_time": str(origin)},
@@ -550,6 +550,7 @@ def test_synth_backtest_skips_unavailable_realized_before_provider(monkeypatch, 
         selection_max,
         _origin_source,
         _realized_source,
+        _score_snapshot_cache,
     ):
         assert selection_max == 24
         return [older_origin, newer_origin]
@@ -569,7 +570,7 @@ def test_synth_backtest_skips_unavailable_realized_before_provider(monkeypatch, 
             "crps_path_price": 0.5,
         },
     })
-    monkeypatch.setattr(rolling, "_historical_miner_scores_for_origins", lambda *_args: {})
+    monkeypatch.setattr(rolling, "_historical_miner_scores_for_origins", lambda *_args, **_kwargs: {})
 
     result = rolling.run_rolling_backtest(
         config,
@@ -670,6 +671,7 @@ def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatc
 
     monkeypatch.setattr(rolling, "SynthClient", FakeSynthClient)
 
+    cache = {}
     origins = rolling._select_origins(
         features,
         config,
@@ -678,10 +680,12 @@ def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatc
         max_origins=None,
         origin_source="synth",
         realized_source="synth",
+        score_snapshot_cache=cache,
     )
 
     assert len(score_windows) > 1
     assert all(end - start <= pd.Timedelta(hours=1) for start, end in score_windows)
+    assert len(cache["snapshots"]) == 3
     assert origins == [
         pd.Timestamp("2026-07-10T02:25:00Z"),
         pd.Timestamp("2026-07-10T03:10:00Z"),
@@ -724,6 +728,34 @@ def test_historical_score_fetch_chunks_long_windows(monkeypatch):
         pd.Timestamp("2026-07-02T03:00:00Z"),
     )
     assert len(rows) == 5
+
+
+def test_historical_miner_scores_reuse_cached_snapshots(monkeypatch):
+    config = {
+        "asset": "BTC",
+        "forecast": {"horizon_seconds": 600},
+        "backtest": {"historical_score_tolerance_minutes": 5},
+    }
+    origin = pd.Timestamp("2026-07-10T03:00:00Z")
+    cached = {
+        pd.Timestamp("2026-07-10T03:10:00Z"): [{"miner_uid": 1, "crps": 10.0}],
+        pd.Timestamp("2026-07-10T04:10:00Z"): [{"miner_uid": 2, "crps": 20.0}],
+    }
+
+    class FailSynthClient:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("cached snapshots should avoid a second Synth score fetch")
+
+    monkeypatch.setattr(rolling, "SynthClient", FailSynthClient)
+
+    grouped = rolling._historical_miner_scores_for_origins(
+        config,
+        [origin],
+        stride_minutes=5,
+        cached_snapshots=cached,
+    )
+
+    assert grouped == {pd.Timestamp("2026-07-10T03:10:00Z"): [{"miner_uid": 1, "crps": 10.0}]}
 
 
 def test_backtest_summary_includes_relevance_statistics():
