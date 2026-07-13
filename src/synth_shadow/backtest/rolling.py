@@ -27,6 +27,7 @@ from synth_shadow.scoring.benchmarks import select_reference_miners
 from synth_shadow.scoring.crps import score_synth_btc_24h
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
 from synth_shadow.synth.client import SynthClient
+from synth_shadow.utils.logging import GREEN, colored_debug
 from synth_shadow.utils.time import utc_now
 
 LOG = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ def run_rolling_backtest(
     )
 
     rows = []
+    sanity_rows = []
     block_bars = int(run_config["sampling"]["block_minutes"] * 60 / interval_seconds)
     horizon_steps = int(run_config["forecast"]["horizon_seconds"] / interval_seconds)
     points_per_path = horizon_steps + 1
@@ -110,6 +112,14 @@ def run_rolling_backtest(
                 paths = output.paths
                 current_price = float(output.metadata["current_price"])
                 model_version = str(output.metadata.get("model_version", model_version))
+                sanity_rows.append(
+                    _http_sanity_row(
+                        output=output,
+                        origin=origin,
+                        expected_paths=num_paths,
+                        expected_points=points_per_path,
+                    )
+                )
             else:
                 library = build_session_library(past_features, block_bars)
                 state = extract_current_state(past_features)
@@ -138,6 +148,30 @@ def run_rolling_backtest(
                 **{name: float(value) for name, value in score["components"].items()},
             }
             rows.append(row)
+            colored_debug(
+                LOG,
+                (
+                    "[BACKTEST CRPS] asset=%s origin=%s raw=%.6f "
+                    "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
+                    "http_latency=%s node_latency=%s shape=%s"
+                ),
+                run_config["asset"],
+                origin,
+                row["raw_crps"],
+                row["crps_5m"],
+                row["crps_30m"],
+                row["crps_3h"],
+                row["crps_24h"],
+                row["crps_path_price"],
+                _format_seconds(output.diagnostics.get("http_latency_seconds"))
+                if provider
+                else "n/a",
+                _format_seconds(_node_total_latency(output.diagnostics))
+                if provider
+                else "n/a",
+                tuple(paths.shape),
+                color=GREEN,
+            )
             if idx == 1 or idx % 12 == 0 or idx == len(origins):
                 LOG.debug("Backtest checkpoint %s/%s: %s", idx, len(origins), row)
         except Exception as exc:  # noqa: BLE001 - keep rolling backtest moving.
@@ -146,7 +180,7 @@ def run_rolling_backtest(
     if not rows:
         raise RuntimeError("Backtest produced no scored origins.")
 
-    result = _summarize_backtest(rows, run_config)
+    result = _summarize_backtest(rows, run_config, sanity_rows)
     result["model"] = {
         "model_version": model_version,
         "model_entrypoint": model_entrypoint,
@@ -232,6 +266,53 @@ def _validate_http_backtest_output(output: ProviderForecast, origin: pd.Timestam
         raise ValueError(f"HTTP backtest data_cutoff {data_cutoff} is after origin {origin}.")
 
 
+def _http_sanity_row(
+    output: ProviderForecast,
+    origin: pd.Timestamp,
+    expected_paths: int,
+    expected_points: int,
+) -> dict[str, Any]:
+    diagnostics = output.diagnostics or {}
+    data_cutoff = _utc_timestamp(output.metadata["data_cutoff"])
+    first_timestamp = _utc_timestamp(output.timestamps[0])
+    shape = tuple(int(x) for x in output.paths.shape)
+    latency = diagnostics.get("http_latency_seconds")
+    node_latency = diagnostics.get("latency_seconds") or {}
+    total_node_latency = node_latency.get("total") if isinstance(node_latency, dict) else None
+    return {
+        "origin": str(_utc_timestamp(origin)),
+        "data_cutoff": str(data_cutoff),
+        "first_timestamp": str(first_timestamp),
+        "past_only": bool(data_cutoff <= _utc_timestamp(origin)),
+        "first_timestamp_matches_origin": bool(first_timestamp == _utc_timestamp(origin)),
+        "path_shape": shape,
+        "path_shape_ok": bool(shape == (expected_paths, expected_points)),
+        "finite_paths": bool(np.isfinite(output.paths).all()),
+        "positive_paths": bool((output.paths > 0).all()),
+        "http_latency_seconds": float(latency) if latency is not None else None,
+        "node_total_latency_seconds": float(total_node_latency) if total_node_latency is not None else None,
+        "data_source": diagnostics.get("data_source"),
+        "num_raw_bars": diagnostics.get("num_raw_bars"),
+        "num_feature_rows": diagnostics.get("num_feature_rows"),
+        "feature_rows_read": diagnostics.get("feature_rows_read"),
+        "nearest_neighbors": diagnostics.get("nearest_neighbors"),
+    }
+
+
+def _node_total_latency(diagnostics: dict[str, Any]) -> float | None:
+    node_latency = diagnostics.get("latency_seconds") or {}
+    if not isinstance(node_latency, dict):
+        return None
+    value = node_latency.get("total")
+    return float(value) if value is not None else None
+
+
+def _format_seconds(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.3f}s"
+
+
 def _format_origin(origin: pd.Timestamp) -> str:
     return _utc_timestamp(origin).isoformat()
 
@@ -243,7 +324,11 @@ def _utc_timestamp(value: Any) -> pd.Timestamp:
     return ts.tz_convert("UTC")
 
 
-def _summarize_backtest(rows: list[dict[str, Any]], config: dict) -> dict[str, Any]:
+def _summarize_backtest(
+    rows: list[dict[str, Any]],
+    config: dict,
+    sanity_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     raw = np.array([row["raw_crps"] for row in rows], dtype=float)
     final_error = np.array(
         [row["forecast_final_median"] - row["realized_final"] for row in rows],
@@ -258,8 +343,10 @@ def _summarize_backtest(rows: list[dict[str, Any]], config: dict) -> dict[str, A
         "final_error_mean": float(np.mean(final_error)),
         "final_abs_error_median": float(np.median(np.abs(final_error))),
     }
+    sanity_summary = _summarize_sanity_rows(sanity_rows or [])
     return {
         "summary": summary,
+        "sanity": sanity_summary,
         "asset": config["asset"],
         "first_rows": rows[:3],
         "last_rows": rows[-3:],
@@ -268,6 +355,54 @@ def _summarize_backtest(rows: list[dict[str, Any]], config: dict) -> dict[str, A
             "stride_minutes": config["backtest"]["stride_minutes"],
             "num_paths": config["forecast"]["num_paths"],
         },
+    }
+
+
+def _summarize_sanity_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    if not rows:
+        return {"enabled": False}
+    http_latencies = [
+        float(row["http_latency_seconds"])
+        for row in rows
+        if row.get("http_latency_seconds") is not None
+    ]
+    node_latencies = [
+        float(row["node_total_latency_seconds"])
+        for row in rows
+        if row.get("node_total_latency_seconds") is not None
+    ]
+    return {
+        "enabled": True,
+        "checked_origins": len(rows),
+        "past_only_passed": bool(all(row["past_only"] for row in rows)),
+        "first_timestamp_alignment_passed": bool(
+            all(row["first_timestamp_matches_origin"] for row in rows)
+        ),
+        "path_shape_passed": bool(all(row["path_shape_ok"] for row in rows)),
+        "finite_paths_passed": bool(all(row["finite_paths"] for row in rows)),
+        "positive_paths_passed": bool(all(row["positive_paths"] for row in rows)),
+        "path_shapes": sorted({str(row["path_shape"]) for row in rows}),
+        "first_origin": rows[0]["origin"],
+        "last_origin": rows[-1]["origin"],
+        "data_sources": sorted(
+            {str(row["data_source"]) for row in rows if row.get("data_source")}
+        ),
+        "http_latency_seconds": _latency_summary(http_latencies),
+        "node_total_latency_seconds": _latency_summary(node_latencies),
+        "first_checks": rows[:3],
+        "last_checks": rows[-3:],
+    }
+
+
+def _latency_summary(values: list[float]) -> dict[str, float] | None:
+    if not values:
+        return None
+    arr = np.array(values, dtype=float)
+    return {
+        "mean": float(np.mean(arr)),
+        "median": float(np.median(arr)),
+        "p95": float(np.percentile(arr, 95)),
+        "max": float(np.max(arr)),
     }
 
 

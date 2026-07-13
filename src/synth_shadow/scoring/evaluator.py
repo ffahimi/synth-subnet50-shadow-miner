@@ -16,6 +16,7 @@ from synth_shadow.scoring.synth_score import compare_to_miners
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
 from synth_shadow.storage.registry import ForecastRegistry
 from synth_shadow.synth.client import SynthClient
+from synth_shadow.utils.logging import GREEN, colored_debug
 
 LOG = logging.getLogger(__name__)
 
@@ -53,6 +54,27 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
         "comparison": comparison,
     }
     LOG.info("Scored forecast_dir=%s raw_crps=%.6f", target, score["raw_crps"])
+    diagnostics = metadata.get("diagnostics") or {}
+    colored_debug(
+        LOG,
+        (
+            "[LIVE CRPS] asset=%s prompt_start=%s raw=%.6f "
+            "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
+            "http_latency=%s node_latency=%s forecast_dir=%s"
+        ),
+        metadata.get("asset", config["asset"]),
+        start_time,
+        float(score["raw_crps"]),
+        float(score["components"]["crps_5m"]),
+        float(score["components"]["crps_30m"]),
+        float(score["components"]["crps_3h"]),
+        float(score["components"]["crps_24h"]),
+        float(score["components"]["crps_path_price"]),
+        _format_seconds(diagnostics.get("http_latency_seconds")),
+        _format_seconds(_node_total_latency(diagnostics)),
+        target,
+        color=GREEN,
+    )
     LOG.debug("Score result: %s", result)
     return result
 
@@ -105,3 +127,17 @@ def _save_realized_path(config: dict, payload: dict[str, Any]) -> Path:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     LOG.debug("Saved realized path to %s", path)
     return path
+
+
+def _node_total_latency(diagnostics: dict[str, Any]) -> float | None:
+    node_latency = diagnostics.get("latency_seconds") or {}
+    if not isinstance(node_latency, dict):
+        return None
+    value = node_latency.get("total")
+    return float(value) if value is not None else None
+
+
+def _format_seconds(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.3f}s"

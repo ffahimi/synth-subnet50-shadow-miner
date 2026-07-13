@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 
 from synth_shadow.forecasting.protocol import ProviderForecast
+from synth_shadow.utils.logging import CYAN, colored_debug
 from synth_shadow.utils.time import utc_now
 
 LOG = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ class HttpForecastProvider:
         data_cutoff = str(body.get("data_cutoff") or timestamps[0])
         diagnostics = dict(body.get("diagnostics") or {})
         diagnostics["http_latency_seconds"] = latency
+        node_latency = diagnostics.get("latency_seconds") or {}
+        node_total_latency = node_latency.get("total") if isinstance(node_latency, dict) else None
         metadata = {
             "provider": self.provider_name,
             "model_version": model_version,
@@ -90,6 +93,7 @@ class HttpForecastProvider:
             "current_price": current_price,
             "debug": bool(config.get("debug", False)),
             "model_metadata": body.get("metadata") or {},
+            "diagnostics": diagnostics,
         }
         feature_snapshot = dict(body.get("feature_snapshot") or {})
         if not feature_snapshot:
@@ -98,6 +102,22 @@ class HttpForecastProvider:
                 "price": current_price,
                 "provider": self.provider_name,
             }
+        colored_debug(
+            LOG,
+            (
+                "[HTTP FORECAST] asset=%s prompt_start=%s origin=%s "
+                "latency=%.3fs node_total=%s paths=%s points=%s cutoff=%s"
+            ),
+            config["asset"],
+            prompt_start_time,
+            _format_timestamp(origin) if origin is not None else None,
+            latency,
+            f"{float(node_total_latency):.3f}s" if node_total_latency is not None else "n/a",
+            paths.shape[0],
+            paths.shape[1],
+            data_cutoff,
+            color=CYAN,
+        )
         return ProviderForecast(
             paths=paths,
             timestamps=timestamps,
