@@ -246,7 +246,10 @@ Run a longer study:
   --days 180 \
   --assets BTC ETH \
   --top-n 25 \
-  --output-dir data/reports/top_miners_research_180d
+  --output-dir data/reports/top_miners_research_180d \
+  --synth-timeout-seconds 120 \
+  --max-retries 6 \
+  --retry-sleep-seconds 10
 ```
 
 If only Synth score consistency is needed and Polygon features can be skipped:
@@ -279,4 +282,3 @@ summary.json
 ```
 
 Outputs are written under `data/reports/...`, which is ignored by git.
-

@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--top-n", type=int, default=25, help="Persistent leader cohort size.")
     parser.add_argument(
+        "--synth-timeout-seconds",
+        type=int,
+        default=90,
+        help="Timeout for Synth API requests.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=4,
+        help="Retries per Synth historical score chunk for transient network errors.",
+    )
+    parser.add_argument(
+        "--retry-sleep-seconds",
+        type=float,
+        default=5.0,
+        help="Base sleep between retries. Backoff is attempt * this value.",
+    )
+    parser.add_argument(
         "--output-dir",
         default="data/reports/top_miners_research",
         help="Directory for generated CSV/JSON research outputs.",
@@ -89,9 +108,12 @@ def fetch_historical_scores(
     start: pd.Timestamp,
     end: pd.Timestamp,
     chunk_hours: int,
+    timeout_seconds: int,
+    max_retries: int,
+    retry_sleep_seconds: float,
 ) -> pd.DataFrame:
     cfg = load_asset_config(config_path, asset)
-    client = SynthClient(cfg)
+    client = SynthClient(cfg, timeout_seconds=timeout_seconds)
     rows: list[dict[str, Any]] = []
     cur = start
     chunk_index = 0
@@ -99,15 +121,16 @@ def fetch_historical_scores(
     while cur < end:
         chunk_index += 1
         chunk_end = min(cur + pd.Timedelta(hours=chunk_hours), end)
-        try:
-            chunk = client.historical_scores(start=cur, end=chunk_end)
-            rows.extend(chunk)
-            print(
-                f"{asset} scores chunk {chunk_index}: {cur} -> {chunk_end}, rows={len(chunk)}",
-                flush=True,
-            )
-        except requests.HTTPError as exc:
-            print(f"{asset} scores chunk {chunk_index} failed: {exc}", flush=True)
+        chunk = _fetch_score_chunk_with_retries(
+            client=client,
+            asset=asset,
+            chunk_index=chunk_index,
+            start=cur,
+            end=chunk_end,
+            max_retries=max_retries,
+            retry_sleep_seconds=retry_sleep_seconds,
+        )
+        rows.extend(chunk)
         cur = chunk_end
 
     df = pd.DataFrame(rows)
@@ -126,6 +149,43 @@ def fetch_historical_scores(
         ascending=True,
     ).astype(int)
     return df
+
+
+def _fetch_score_chunk_with_retries(
+    client: SynthClient,
+    asset: str,
+    chunk_index: int,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    max_retries: int,
+    retry_sleep_seconds: float,
+) -> list[dict[str, Any]]:
+    for attempt in range(1, max_retries + 1):
+        try:
+            chunk = client.historical_scores(start=start, end=end)
+            print(
+                f"{asset} scores chunk {chunk_index}: {start} -> {end}, rows={len(chunk)}",
+                flush=True,
+            )
+            return chunk
+        except requests.HTTPError as exc:
+            print(
+                f"{asset} scores chunk {chunk_index} HTTP failed "
+                f"attempt={attempt}/{max_retries}: {exc}",
+                flush=True,
+            )
+            if attempt == max_retries:
+                return []
+        except requests.RequestException as exc:
+            print(
+                f"{asset} scores chunk {chunk_index} network failed "
+                f"attempt={attempt}/{max_retries}: {exc}",
+                flush=True,
+            )
+            if attempt == max_retries:
+                return []
+        time.sleep(retry_sleep_seconds * attempt)
+    return []
 
 
 def latest_reward_weights(config_path: str | Path) -> pd.DataFrame:
@@ -416,7 +476,16 @@ def analyze_asset(
     output_dir: Path,
 ) -> dict[str, Any]:
     print(f"\n=== {asset} ===", flush=True)
-    scores = fetch_historical_scores(asset, args.config, start, end, args.chunk_hours)
+    scores = fetch_historical_scores(
+        asset=asset,
+        config_path=args.config,
+        start=start,
+        end=end,
+        chunk_hours=args.chunk_hours,
+        timeout_seconds=args.synth_timeout_seconds,
+        max_retries=args.max_retries,
+        retry_sleep_seconds=args.retry_sleep_seconds,
+    )
     if scores.empty:
         raise RuntimeError(f"No valid historical scores returned for {asset}.")
 
