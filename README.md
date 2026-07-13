@@ -777,8 +777,10 @@ The green CRPS line is emitted after every origin is scored:
 Fields:
 
 ```text
-raw: combined Synth-style CRPS score
-5m / 30m / 3h / 24h / path: CRPS components
+raw: validator-compatible Synth CRPS score, summed over scored increments
+5m / 30m / 3h: summed CRPS over non-overlapping return increments in basis points
+24h: validator 24hour_abs component, absolute final-price CRPS normalized to basis points
+path: diagnostic average price-path CRPS, not included in raw
 historical_top10_mean / historical_top10_median / historical_top10_std: top-10 valid Synth miner CRPS statistics from the matched historical score snapshot
 historical_rank: our estimated rank among valid miners in the matched historical score snapshot
 historical_miners_beaten: count of valid matched-time miners with worse CRPS than ours
@@ -860,9 +862,12 @@ comparison fields shown in the debug line, including `historical_rank`,
 `historical_miner_count`, `historical_top10_mean`, and
 `gap_vs_historical_mean`.
 
-CRPS components are scored on price changes in basis points, not raw dollar
-price changes. That keeps BTC, ETH, XAU, and other assets on the same unit
-scale, matching Synth's documented scoring methodology.
+The raw CRPS calculation matches Synth validator semantics from
+`synth/validator/crps_calculation.py`: 5m, 30m, and 3h components are summed
+over non-overlapping return increments in basis points, while the 24h component
+uses the absolute final price and normalizes the CRPS by realized final price
+into basis points. Because it is a sum, not an average, it is comparable to the
+`crps` field returned by Synth's historical miner score snapshots.
 
 ## Top Miner Regime Research
 
