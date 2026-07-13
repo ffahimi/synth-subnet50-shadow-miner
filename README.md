@@ -837,8 +837,32 @@ synth-shadow backtest-rolling \
   --backtest-maturity-lag-minutes 60 \
   --backtest-days 193 \
   --backtest-stride-minutes 60 \
+  --backtest-checkpoint-every 25 \
   --backtest-num-paths 250
 ```
+
+For a long inference-node run in `screen`, use a larger origin count and let the
+backtest checkpoint partial results:
+
+```bash
+export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
+
+.venv/bin/python -m synth_shadow.cli backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-origin-source synth \
+  --backtest-realized-source synth \
+  --backtest-maturity-lag-minutes 60 \
+  --backtest-days 30 \
+  --backtest-max-origins 200 \
+  --backtest-num-paths 64 \
+  --backtest-checkpoint-every 10
+```
+
+The output directory is logged before scoring begins. During long runs,
+`rolling_results.csv` and `summary.json` are rewritten every checkpoint, so you
+can inspect or download partial results without waiting for the full run to
+finish.
 
 The backtest summary includes:
 
@@ -849,6 +873,21 @@ raw_crps_p25 / raw_crps_p75
 final_error_mean
 final_abs_error_median
 ```
+
+It also includes:
+
+```text
+comparison
+by_session
+by_realized_abs_return
+by_realized_volatility
+```
+
+Use `comparison.beat_top10_mean_rate`,
+`comparison.beat_miner_median_rate`, `comparison.gap_vs_top10_mean_avg`, and
+`comparison.estimated_prompt_score_mean` as the first relevance checks. If the
+model rarely beats the miner median and the average gap versus top miners stays
+positive across sessions/regimes, the model is not yet competitive.
 
 For HTTP inference-node backtests, the saved `summary.json` also includes a
 `sanity` block with past-only cutoff checks, first-timestamp alignment, path

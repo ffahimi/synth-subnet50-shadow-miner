@@ -70,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Minutes to lag latest Synth backtest origin so realized paths and scores are published.",
     )
+    parser.add_argument(
+        "--backtest-checkpoint-every",
+        type=int,
+        help="Write partial backtest CSV/summary every N scored origins.",
+    )
     return parser
 
 
@@ -116,6 +121,7 @@ def main() -> None:
             realized_source=args.backtest_realized_source,
             origin_source=args.backtest_origin_source,
             maturity_lag_minutes=args.backtest_maturity_lag_minutes,
+            checkpoint_every=args.backtest_checkpoint_every,
         )
     elif args.command == "run-synth-shadow":
         result = run_shadow_cycle(config)

@@ -89,8 +89,10 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
     original_select_origins = rolling._select_origins
     original_extract_current_state = rolling.extract_current_state
 
+    saved_dir = tmp_path / "saved"
+    saved_dir.mkdir()
     monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: source_bars)
-    monkeypatch.setattr(rolling, "_save_backtest", lambda _rows, _result, _config: tmp_path / "saved")
+    monkeypatch.setattr(rolling, "_new_backtest_output_dir", lambda _config: saved_dir)
 
     def audited_build_feature_frame(bars: pd.DataFrame, patched_config: dict) -> pd.DataFrame:
         features = original_build_feature_frame(bars, patched_config)
@@ -264,6 +266,7 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         "stride_minutes": stride_minutes,
         "num_paths": num_paths,
         "maturity_lag_minutes": 60,
+        "checkpoint_every": 25,
         "origin_source": "polygon",
         "realized_source": "polygon",
     }
@@ -681,3 +684,61 @@ def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatc
         pd.Timestamp("2026-07-10T02:25:00Z"),
         pd.Timestamp("2026-07-10T03:10:00Z"),
     ]
+
+
+def test_backtest_summary_includes_relevance_statistics():
+    rows = [
+        {
+            "origin": "2026-07-10T01:00:00Z",
+            "raw_crps": 100.0,
+            "forecast_final_median": 101.0,
+            "realized_final": 100.0,
+            "origin_session": "outside_market_hours",
+            "realized_abs_return_bps": 50.0,
+            "realized_vol_5m_bps": 5.0,
+            "historical_miner_count": 10,
+            "historical_rank": 2,
+            "historical_percentile_beaten": 0.9,
+            "historical_top10_mean": 120.0,
+            "historical_top10_median": 115.0,
+            "historical_median_crps": 130.0,
+            "gap_vs_historical_mean": -20.0,
+            "gap_vs_historical_median": -30.0,
+            "beats_historical_top10_mean": True,
+            "beats_historical_top10_median": True,
+            "beats_historical_median": True,
+            "estimated_prompt_score": 10.0,
+        },
+        {
+            "origin": "2026-07-10T14:00:00Z",
+            "raw_crps": 200.0,
+            "forecast_final_median": 99.0,
+            "realized_final": 100.0,
+            "origin_session": "us",
+            "realized_abs_return_bps": 200.0,
+            "realized_vol_5m_bps": 20.0,
+            "historical_miner_count": 10,
+            "historical_rank": 11,
+            "historical_percentile_beaten": 0.0,
+            "historical_top10_mean": 150.0,
+            "historical_top10_median": 145.0,
+            "historical_median_crps": 160.0,
+            "gap_vs_historical_mean": 50.0,
+            "gap_vs_historical_median": 40.0,
+            "beats_historical_top10_mean": False,
+            "beats_historical_top10_median": False,
+            "beats_historical_median": False,
+            "estimated_prompt_score": 80.0,
+        },
+    ]
+    config = apply_asset(load_config("config/default.yaml"), "BTC")
+    result = rolling._summarize_backtest(rows, config, sanity_rows=[])
+
+    assert result["summary"]["origin_count"] == 2
+    assert result["comparison"]["beat_top10_mean_rate"] == 0.5
+    assert result["comparison"]["beat_miner_median_rate"] == 0.5
+    assert result["comparison"]["gap_vs_top10_mean_avg"] == 15.0
+    assert result["comparison"]["estimated_prompt_score_mean"] == 45.0
+    assert {row["group"] for row in result["by_session"]} == {"outside_market_hours", "us"}
+    assert result["by_realized_abs_return"]
+    assert result["by_realized_volatility"]

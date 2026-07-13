@@ -49,6 +49,7 @@ backtest:
   max_origins:
   num_paths: 250
   compare_miners: 4
+  checkpoint_every: 25
   historical_score_tolerance_minutes: 30
   maturity_lag_minutes: 60
   synth_realized_scan_multiplier: 24

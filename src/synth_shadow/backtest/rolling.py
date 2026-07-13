@@ -25,7 +25,11 @@ from synth_shadow.models.path_sampler import PathSampler
 from synth_shadow.models.protocol import ForecastContext
 from synth_shadow.models.session_path_model import build_session_library
 from synth_shadow.scoring.crps import score_synth_btc_24h
-from synth_shadow.scoring.synth_score import rank_against_miners, top_miner_crps_stats
+from synth_shadow.scoring.synth_score import (
+    rank_against_miners,
+    top_miner_crps_stats,
+    valid_miner_crps_values,
+)
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
 from synth_shadow.synth.client import SynthClient
 from synth_shadow.utils.logging import GREEN, YELLOW, colored_debug
@@ -43,6 +47,7 @@ def run_rolling_backtest(
     realized_source: str | None = None,
     origin_source: str | None = None,
     maturity_lag_minutes: float | None = None,
+    checkpoint_every: int | None = None,
 ) -> dict[str, Any]:
     """Run a rolling 24h historical forecast backtest.
 
@@ -69,6 +74,8 @@ def run_rolling_backtest(
         run_config["backtest"]["origin_source"] = origin_source
     if maturity_lag_minutes is not None:
         run_config["backtest"]["maturity_lag_minutes"] = maturity_lag_minutes
+    if checkpoint_every is not None:
+        run_config["backtest"]["checkpoint_every"] = checkpoint_every
     realized_source = str(run_config["backtest"].get("realized_source", "polygon")).lower()
     if realized_source not in {"polygon", "synth"}:
         raise ValueError("backtest.realized_source must be 'polygon' or 'synth'.")
@@ -158,6 +165,10 @@ def run_rolling_backtest(
             color=YELLOW,
         )
 
+    output_dir = _new_backtest_output_dir(run_config)
+    LOG.info("Backtest outputs will be written to %s", output_dir)
+    checkpoint_every = _checkpoint_every(run_config)
+
     for idx, origin in enumerate(origins, start=1):
         past_bars = bars[bars["timestamp"] <= origin].copy()
         past_features = features[features["timestamp"] <= origin].copy()
@@ -218,6 +229,13 @@ def run_rolling_backtest(
                 "raw_crps": float(score["raw_crps"]),
                 **{name: float(value) for name, value in score["components"].items()},
             }
+            if provider:
+                row.update(
+                    {
+                        "http_latency_seconds": output.diagnostics.get("http_latency_seconds"),
+                        "node_latency_seconds": _node_total_latency(output.diagnostics),
+                    }
+                )
             historical_snapshot = _nearest_historical_miner_scores(
                 origin,
                 historical_scores,
@@ -227,6 +245,7 @@ def run_rolling_backtest(
             miner_scores_at_origin = historical_snapshot["scores"] if historical_snapshot else []
             top10_stats = top_miner_crps_stats(miner_scores_at_origin, count=10)
             historical_rank = rank_against_miners(row["raw_crps"], miner_scores_at_origin)
+            row.update(_origin_diagnostics(origin, past_features, realized, miner_scores_at_origin, top10_stats))
             row.update(
                 {
                     "historical_rank": historical_rank["rank"],
@@ -245,6 +264,7 @@ def run_rolling_backtest(
                     "gap_vs_historical_median": _gap(row["raw_crps"], top10_stats["median"]),
                 }
             )
+            _finalize_origin_diagnostics(row)
             rows.append(row)
             colored_debug(
                 LOG,
@@ -288,6 +308,22 @@ def run_rolling_backtest(
             )
             if idx == 1 or idx % 12 == 0 or idx == len(origins):
                 LOG.debug("Backtest checkpoint %s/%s: %s", idx, len(origins), row)
+            if checkpoint_every and len(rows) % checkpoint_every == 0:
+                checkpoint_result = _build_backtest_result(
+                    rows,
+                    run_config,
+                    sanity_rows,
+                    historical_scores,
+                    model_version,
+                    model_entrypoint,
+                    output_dir,
+                )
+                _write_backtest_outputs(output_dir, rows, checkpoint_result)
+                LOG.info(
+                    "Checkpointed rolling backtest scored_origins=%s output_dir=%s",
+                    len(rows),
+                    output_dir,
+                )
             if max_origins is not None and len(rows) >= max_origins:
                 LOG.info("Reached requested scored origin limit max_origins=%s", max_origins)
                 break
@@ -306,17 +342,16 @@ def run_rolling_backtest(
     if not rows:
         raise RuntimeError("Backtest produced no scored origins.")
 
-    result = _summarize_backtest(rows, run_config, sanity_rows)
-    result["historical_miner_snapshot"] = {
-        "score_snapshot_count": len(historical_scores),
-        "comparison_note": "per-origin nearest historical Synth score snapshots",
-    }
-    result["model"] = {
-        "model_version": model_version,
-        "model_entrypoint": model_entrypoint,
-    }
-    output_dir = _save_backtest(rows, result, run_config)
-    result["output_dir"] = str(output_dir)
+    result = _build_backtest_result(
+        rows,
+        run_config,
+        sanity_rows,
+        historical_scores,
+        model_version,
+        model_entrypoint,
+        output_dir,
+    )
+    _write_backtest_outputs(output_dir, rows, result)
     LOG.info("Completed rolling backtest: %s", result["summary"])
     return result
 
@@ -579,6 +614,18 @@ def _summarize_backtest(
     sanity_summary = _summarize_sanity_rows(sanity_rows or [])
     return {
         "summary": summary,
+        "comparison": _summarize_comparison(rows),
+        "by_session": _group_summary(rows, "origin_session"),
+        "by_realized_abs_return": _quantile_group_summary(
+            rows,
+            "realized_abs_return_bps",
+            "realized_abs_return_bucket",
+        ),
+        "by_realized_volatility": _quantile_group_summary(
+            rows,
+            "realized_vol_5m_bps",
+            "realized_vol_bucket",
+        ),
         "sanity": sanity_summary,
         "asset": config["asset"],
         "first_rows": rows[:3],
@@ -588,10 +635,182 @@ def _summarize_backtest(
             "stride_minutes": config["backtest"]["stride_minutes"],
             "num_paths": config["forecast"]["num_paths"],
             "maturity_lag_minutes": config["backtest"].get("maturity_lag_minutes", 0),
+            "checkpoint_every": config["backtest"].get("checkpoint_every", 0),
             "origin_source": config["backtest"].get("origin_source", "polygon"),
             "realized_source": config["backtest"].get("realized_source", "polygon"),
         },
     }
+
+
+def _origin_diagnostics(
+    origin: pd.Timestamp,
+    past_features: pd.DataFrame,
+    realized: np.ndarray,
+    miner_scores: list[dict[str, Any]],
+    top10_stats: dict[str, Any],
+) -> dict[str, Any]:
+    origin = _utc_timestamp(origin)
+    miner_values = valid_miner_crps_values(miner_scores)
+    realized_return_bps = ((float(realized[-1]) - float(realized[0])) / float(realized[0])) * 10000.0
+    realized_step_returns = np.diff(realized) / realized[:-1] * 10000.0
+    session = None
+    if not past_features.empty and "session" in past_features.columns:
+        session = str(past_features.iloc[-1]["session"])
+    row = {
+        "origin_hour_utc": int(origin.hour),
+        "origin_weekday": int(origin.weekday()),
+        "origin_session": session,
+        "realized_return_bps": float(realized_return_bps),
+        "realized_abs_return_bps": float(abs(realized_return_bps)),
+        "realized_vol_5m_bps": float(np.std(realized_step_returns, ddof=0)),
+        "forecast_final_error_bps": None,
+        "historical_best_crps": None,
+        "historical_median_crps": None,
+        "historical_p25_crps": None,
+        "historical_p90_crps": None,
+        "gap_vs_historical_best": None,
+        "gap_vs_historical_median": None,
+        "beats_historical_median": None,
+        "beats_historical_top10_mean": None,
+        "beats_historical_top10_median": None,
+        "estimated_prompt_score": None,
+    }
+    if miner_values.size:
+        row.update(
+            {
+                "historical_best_crps": float(np.min(miner_values)),
+                "historical_median_crps": float(np.median(miner_values)),
+                "historical_p25_crps": float(np.percentile(miner_values, 25)),
+                "historical_p90_crps": float(np.percentile(miner_values, 90)),
+            }
+        )
+    return row
+
+
+def _finalize_origin_diagnostics(row: dict[str, Any]) -> None:
+    if row.get("realized_final") not in (None, 0) and row.get("forecast_final_median") is not None:
+        row["forecast_final_error_bps"] = (
+            (float(row["forecast_final_median"]) - float(row["realized_final"]))
+            / float(row["realized_final"])
+            * 10000.0
+        )
+    if row.get("historical_best_crps") is not None:
+        row["gap_vs_historical_best"] = float(row["raw_crps"]) - float(row["historical_best_crps"])
+        p90 = row.get("historical_p90_crps")
+        capped_ours = min(float(row["raw_crps"]), float(p90)) if p90 is not None else float(row["raw_crps"])
+        row["estimated_prompt_score"] = capped_ours - float(row["historical_best_crps"])
+    if row.get("historical_median_crps") is not None:
+        row["gap_vs_historical_median"] = float(row["raw_crps"]) - float(row["historical_median_crps"])
+        row["beats_historical_median"] = bool(float(row["raw_crps"]) < float(row["historical_median_crps"]))
+    if row.get("historical_top10_mean") is not None:
+        row["beats_historical_top10_mean"] = bool(float(row["raw_crps"]) < float(row["historical_top10_mean"]))
+    if row.get("historical_top10_median") is not None:
+        row["beats_historical_top10_median"] = bool(float(row["raw_crps"]) < float(row["historical_top10_median"]))
+
+
+def _summarize_comparison(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return {}
+    return {
+        "scored_origins": int(len(df)),
+        "matched_miner_origins": int(df["historical_miner_count"].fillna(0).gt(0).sum())
+        if "historical_miner_count" in df
+        else 0,
+        "raw_crps_mean": _series_mean(df, "raw_crps"),
+        "raw_crps_median": _series_median(df, "raw_crps"),
+        "gap_vs_top10_mean_avg": _series_mean(df, "gap_vs_historical_mean"),
+        "gap_vs_miner_median_avg": _series_mean(df, "gap_vs_historical_median"),
+        "estimated_prompt_score_mean": _series_mean(df, "estimated_prompt_score"),
+        "percentile_beaten_mean": _series_mean(df, "historical_percentile_beaten"),
+        "beat_top10_mean_rate": _bool_rate(df, "beats_historical_top10_mean"),
+        "beat_top10_median_rate": _bool_rate(df, "beats_historical_top10_median"),
+        "beat_miner_median_rate": _bool_rate(df, "beats_historical_median"),
+        "median_rank": _series_median(df, "historical_rank"),
+        "best_rank": _series_min(df, "historical_rank"),
+        "worst_rank": _series_max(df, "historical_rank"),
+        "mean_http_latency_seconds": _series_mean(df, "http_latency_seconds"),
+        "mean_node_latency_seconds": _series_mean(df, "node_latency_seconds"),
+    }
+
+
+def _group_summary(rows: list[dict[str, Any]], group_col: str) -> list[dict[str, Any]]:
+    df = pd.DataFrame(rows)
+    if df.empty or group_col not in df:
+        return []
+    groups = []
+    for value, group in df.dropna(subset=[group_col]).groupby(group_col):
+        groups.append(_summary_for_group(str(value), group))
+    return sorted(groups, key=lambda row: row["count"], reverse=True)
+
+
+def _quantile_group_summary(rows: list[dict[str, Any]], value_col: str, label_col: str) -> list[dict[str, Any]]:
+    df = pd.DataFrame(rows)
+    if df.empty or value_col not in df:
+        return []
+    values = pd.to_numeric(df[value_col], errors="coerce")
+    valid = df[values.notna()].copy()
+    if valid.empty:
+        return []
+    try:
+        valid[label_col] = pd.qcut(
+            pd.to_numeric(valid[value_col], errors="coerce"),
+            q=min(3, len(valid)),
+            labels=["low", "mid", "high"][: min(3, len(valid))],
+            duplicates="drop",
+        )
+    except ValueError:
+        valid[label_col] = "all"
+    return _group_summary(valid.to_dict("records"), label_col)
+
+
+def _summary_for_group(name: str, group: pd.DataFrame) -> dict[str, Any]:
+    return {
+        "group": name,
+        "count": int(len(group)),
+        "raw_crps_mean": _series_mean(group, "raw_crps"),
+        "raw_crps_median": _series_median(group, "raw_crps"),
+        "gap_vs_top10_mean_avg": _series_mean(group, "gap_vs_historical_mean"),
+        "gap_vs_miner_median_avg": _series_mean(group, "gap_vs_historical_median"),
+        "percentile_beaten_mean": _series_mean(group, "historical_percentile_beaten"),
+        "beat_top10_mean_rate": _bool_rate(group, "beats_historical_top10_mean"),
+        "beat_miner_median_rate": _bool_rate(group, "beats_historical_median"),
+        "realized_abs_return_bps_mean": _series_mean(group, "realized_abs_return_bps"),
+        "realized_vol_5m_bps_mean": _series_mean(group, "realized_vol_5m_bps"),
+    }
+
+
+def _numeric_series(df: pd.DataFrame, col: str) -> pd.Series:
+    if col not in df:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(df[col], errors="coerce").dropna()
+
+
+def _series_mean(df: pd.DataFrame, col: str) -> float | None:
+    values = _numeric_series(df, col)
+    return float(values.mean()) if not values.empty else None
+
+
+def _series_median(df: pd.DataFrame, col: str) -> float | None:
+    values = _numeric_series(df, col)
+    return float(values.median()) if not values.empty else None
+
+
+def _series_min(df: pd.DataFrame, col: str) -> float | None:
+    values = _numeric_series(df, col)
+    return float(values.min()) if not values.empty else None
+
+
+def _series_max(df: pd.DataFrame, col: str) -> float | None:
+    values = _numeric_series(df, col)
+    return float(values.max()) if not values.empty else None
+
+
+def _bool_rate(df: pd.DataFrame, col: str) -> float | None:
+    if col not in df:
+        return None
+    values = df[col].dropna()
+    return float(values.astype(bool).mean()) if not values.empty else None
 
 
 def _summarize_sanity_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -752,11 +971,46 @@ def _selection_max_origins(
     return max(max_origins, max_origins * max(1, multiplier))
 
 
-def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:
-    output_dir = ensure_dir(
+def _checkpoint_every(config: dict) -> int:
+    configured = config.get("backtest", {}).get("checkpoint_every", 0)
+    return int(configured) if configured not in (None, "") else 0
+
+
+def _build_backtest_result(
+    rows: list[dict[str, Any]],
+    config: dict,
+    sanity_rows: list[dict[str, Any]],
+    historical_scores: dict[pd.Timestamp, list[dict[str, Any]]],
+    model_version: str,
+    model_entrypoint: str | None,
+    output_dir: Path,
+) -> dict[str, Any]:
+    result = _summarize_backtest(rows, config, sanity_rows)
+    result["historical_miner_snapshot"] = {
+        "score_snapshot_count": len(historical_scores),
+        "comparison_note": "per-origin nearest historical Synth score snapshots",
+    }
+    result["model"] = {
+        "model_version": model_version,
+        "model_entrypoint": model_entrypoint,
+    }
+    result["output_dir"] = str(output_dir)
+    return result
+
+
+def _new_backtest_output_dir(config: dict) -> Path:
+    return ensure_dir(
         Path(config["storage"]["backtest_dir"]) / config["asset"] / safe_timestamp(utc_now())
     )
+
+
+def _write_backtest_outputs(output_dir: Path, rows: list[dict[str, Any]], result: dict[str, Any]) -> None:
     pd.DataFrame(rows).to_csv(output_dir / "rolling_results.csv", index=False)
     (output_dir / "summary.json").write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+
+
+def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:
+    output_dir = _new_backtest_output_dir(config)
+    _write_backtest_outputs(output_dir, rows, result)
     LOG.info("Saved backtest outputs to %s", output_dir)
     return output_dir
