@@ -12,11 +12,7 @@ LOG = logging.getLogger(__name__)
 
 def compare_to_miners(raw_crps: float, miner_scores: list[dict[str, Any]]) -> dict[str, Any]:
     """Compare our raw CRPS to miner raw CRPS values."""
-    crps_values = np.array(
-        [float(row["crps"]) for row in miner_scores if row.get("crps") is not None],
-        dtype=float,
-    )
-    crps_values = crps_values[np.isfinite(crps_values) & (crps_values >= 0)]
+    crps_values = valid_miner_crps_values(miner_scores)
     if crps_values.size == 0:
         return {
             "miner_count": 0,
@@ -25,9 +21,11 @@ def compare_to_miners(raw_crps: float, miner_scores: list[dict[str, Any]]) -> di
             "best_crps": None,
             "median_crps": None,
             "top_25_threshold": None,
+            "estimated_rank": None,
         }
 
     beaten = float(np.mean(crps_values > raw_crps))
+    better_count = int(np.sum(crps_values < raw_crps))
     cap = float(np.percentile(crps_values, 90))
     capped_you = min(float(raw_crps), cap)
     capped_miners = np.minimum(crps_values, cap)
@@ -39,12 +37,47 @@ def compare_to_miners(raw_crps: float, miner_scores: list[dict[str, Any]]) -> di
         "best_crps": float(np.min(crps_values)),
         "median_crps": float(np.median(crps_values)),
         "top_25_threshold": float(np.percentile(crps_values, 25)),
+        "estimated_rank": better_count + 1,
         "p90_cap": cap,
         "best_gap": float(raw_crps - np.min(crps_values)),
         "median_gap": float(raw_crps - np.median(crps_values)),
     }
     LOG.debug("Miner comparison: %s", comparison)
     return comparison
+
+
+def valid_miner_crps_values(miner_scores: list[dict[str, Any]]) -> np.ndarray:
+    """Return finite, non-negative miner CRPS values sorted ascending."""
+    values = np.array(
+        [float(row["crps"]) for row in miner_scores if row.get("crps") is not None],
+        dtype=float,
+    )
+    values = values[np.isfinite(values) & (values >= 0)]
+    return np.sort(values)
+
+
+def rank_against_miners(raw_crps: float, miner_scores: list[dict[str, Any]]) -> dict[str, Any]:
+    """Estimate our rank against a miner score snapshot. Lower CRPS ranks better."""
+    values = valid_miner_crps_values(miner_scores)
+    if values.size == 0:
+        return {
+            "miner_count": 0,
+            "rank": None,
+            "miners_beaten": None,
+            "percentile_beaten": None,
+            "best_crps": None,
+            "rank_note": "no valid non-negative miner CRPS values",
+        }
+    better_count = int(np.sum(values < raw_crps))
+    beaten_count = int(np.sum(values > raw_crps))
+    return {
+        "miner_count": int(values.size),
+        "rank": better_count + 1,
+        "miners_beaten": beaten_count,
+        "percentile_beaten": float(beaten_count / values.size),
+        "best_crps": float(values[0]),
+        "rank_note": "estimated against latest valid Synth score snapshot",
+    }
 
 
 def top_miner_crps_stats(miner_scores: list[dict[str, Any]], count: int = 10) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-from synth_shadow.scoring.synth_score import compare_to_miners, top_miner_crps_stats
+from synth_shadow.scoring.synth_score import compare_to_miners, rank_against_miners, top_miner_crps_stats
 
 
 def test_top_miner_stats_filter_invalid_sentinel_crps():
@@ -12,6 +12,7 @@ def test_top_miner_stats_filter_invalid_sentinel_crps():
 
     stats = top_miner_crps_stats(scores, count=2)
     comparison = compare_to_miners(15.0, scores)
+    rank = rank_against_miners(15.0, scores)
 
     assert stats["count"] == 2
     assert stats["uids"] == [3, 2]
@@ -20,3 +21,8 @@ def test_top_miner_stats_filter_invalid_sentinel_crps():
     assert stats["min"] == 10.0
     assert comparison["miner_count"] == 3
     assert comparison["best_crps"] == 10.0
+    assert comparison["estimated_rank"] == 2
+    assert rank["rank"] == 2
+    assert rank["miner_count"] == 3
+    assert rank["miners_beaten"] == 2
+    assert rank["percentile_beaten"] == 2 / 3

@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 
 from synth_shadow.scoring.crps import score_synth_btc_24h
-from synth_shadow.scoring.synth_score import compare_to_miners, top_miner_crps_stats
+from synth_shadow.scoring.synth_score import compare_to_miners, rank_against_miners, top_miner_crps_stats
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
 from synth_shadow.storage.registry import ForecastRegistry
 from synth_shadow.synth.client import SynthClient
@@ -40,6 +40,7 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
     latest_scores = client.latest_scores()
     comparison = compare_to_miners(score["raw_crps"], latest_scores)
     top10_stats = top_miner_crps_stats(latest_scores, count=10)
+    latest_rank = rank_against_miners(score["raw_crps"], latest_scores)
     realized_file = _save_realized_path(config, realized_payload)
 
     ForecastRegistry(config["storage"]["registry_path"]).register_score(
@@ -61,6 +62,8 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
         (
             "[LIVE CRPS] asset=%s prompt_start=%s raw=%.6f "
             "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
+            "latest_rank_estimate=%s/%s latest_miners_beaten=%s "
+            "latest_percentile_beaten=%s "
             "latest_top10_mean=%s latest_top10_median=%s latest_top10_std=%s "
             "gap_vs_latest_mean=%s gap_vs_latest_median=%s "
             "http_latency=%s node_latency=%s forecast_dir=%s"
@@ -73,6 +76,10 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
         float(score["components"]["crps_3h"]),
         float(score["components"]["crps_24h"]),
         float(score["components"]["crps_path_price"]),
+        _format_rank(latest_rank["rank"]),
+        latest_rank["miner_count"],
+        _format_rank(latest_rank["miners_beaten"]),
+        _format_percent(latest_rank["percentile_beaten"]),
         _format_float(top10_stats["mean"]),
         _format_float(top10_stats["median"]),
         _format_float(top10_stats["std"]),
@@ -155,6 +162,18 @@ def _format_float(value: Any) -> str:
     if value is None:
         return "n/a"
     return f"{float(value):.6f}"
+
+
+def _format_percent(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{100 * float(value):.2f}%"
+
+
+def _format_rank(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return str(int(value))
 
 
 def _gap(ours: float, miner_stat: Any) -> float | None:

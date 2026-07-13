@@ -25,7 +25,7 @@ from synth_shadow.models.protocol import ForecastContext
 from synth_shadow.models.session_path_model import build_session_library
 from synth_shadow.scoring.benchmarks import select_reference_miners
 from synth_shadow.scoring.crps import score_synth_btc_24h
-from synth_shadow.scoring.synth_score import top_miner_crps_stats
+from synth_shadow.scoring.synth_score import rank_against_miners, top_miner_crps_stats
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
 from synth_shadow.synth.client import SynthClient
 from synth_shadow.utils.logging import GREEN, YELLOW, colored_debug
@@ -94,7 +94,8 @@ def run_rolling_backtest(
     model = None if provider else load_forecast_model(run_config)
     model_version = "http_provider" if provider else str(getattr(model, "model_version", model.__class__.__name__))
     model_entrypoint = endpoint if provider else configured_model_entrypoint(run_config)
-    top10_stats = _latest_top_miner_crps_stats(run_config, count=10)
+    latest_miner_scores = _latest_miner_scores(run_config)
+    top10_stats = top_miner_crps_stats(latest_miner_scores, count=10)
     if top10_stats["count"]:
         colored_debug(
             LOG,
@@ -167,11 +168,14 @@ def run_rolling_backtest(
                 **{name: float(value) for name, value in score["components"].items()},
             }
             rows.append(row)
+            latest_rank = rank_against_miners(row["raw_crps"], latest_miner_scores)
             colored_debug(
                 LOG,
                 (
                     "[BACKTEST CRPS] asset=%s origin=%s raw=%.6f "
                     "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
+                    "latest_rank_estimate=%s/%s latest_miners_beaten=%s "
+                    "latest_percentile_beaten=%s "
                     "latest_top10_mean=%s latest_top10_median=%s latest_top10_std=%s "
                     "gap_vs_latest_mean=%s gap_vs_latest_median=%s "
                     "http_latency=%s node_latency=%s shape=%s"
@@ -184,6 +188,10 @@ def run_rolling_backtest(
                 row["crps_3h"],
                 row["crps_24h"],
                 row["crps_path_price"],
+                _format_rank(latest_rank["rank"]),
+                latest_rank["miner_count"],
+                _format_rank(latest_rank["miners_beaten"]),
+                _format_percent(latest_rank["percentile_beaten"]),
                 _format_float(top10_stats["mean"]),
                 _format_float(top10_stats["median"]),
                 _format_float(top10_stats["std"]),
@@ -208,6 +216,10 @@ def run_rolling_backtest(
 
     result = _summarize_backtest(rows, run_config, sanity_rows)
     result["top10_miner_crps_stats"] = top10_stats
+    result["latest_miner_snapshot"] = {
+        "valid_miner_count": len(latest_miner_scores),
+        "comparison_note": "latest Synth score snapshot, not same-origin historical miner scores",
+    }
     result["model"] = {
         "model_version": model_version,
         "model_entrypoint": model_entrypoint,
@@ -346,6 +358,18 @@ def _format_float(value: Any) -> str:
     return f"{float(value):.6f}"
 
 
+def _format_percent(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{100 * float(value):.2f}%"
+
+
+def _format_rank(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return str(int(value))
+
+
 def _gap(ours: float, miner_stat: Any) -> float | None:
     if miner_stat is None:
         return None
@@ -460,12 +484,12 @@ def _reference_miners(config: dict) -> list[dict[str, Any]]:
         return []
 
 
-def _latest_top_miner_crps_stats(config: dict, count: int = 10) -> dict[str, Any]:
+def _latest_miner_scores(config: dict) -> list[dict[str, Any]]:
     try:
-        return top_miner_crps_stats(SynthClient(config).latest_scores(), count=count)
+        return SynthClient(config).latest_scores()
     except Exception as exc:  # noqa: BLE001 - backtest should continue without comparison stats.
-        LOG.warning("Could not fetch top miner CRPS stats for backtest debug lines: %s", exc)
-        return top_miner_crps_stats([], count=count)
+        LOG.warning("Could not fetch latest miner CRPS snapshot for backtest debug lines: %s", exc)
+        return []
 
 
 def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:

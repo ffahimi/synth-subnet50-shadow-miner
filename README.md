@@ -594,7 +594,7 @@ When a live forecast later matures and `score-matured --debug` or
 `run-synth-shadow-sanity --debug` scores it, the scorer prints a green line:
 
 ```text
-[LIVE CRPS] asset=BTC prompt_start=... raw=... 5m=... 30m=... 3h=... 24h=... path=... latest_top10_mean=... latest_top10_median=... latest_top10_std=... gap_vs_latest_mean=... gap_vs_latest_median=... http_latency=... node_latency=... forecast_dir=...
+[LIVE CRPS] asset=BTC prompt_start=... raw=... 5m=... 30m=... 3h=... 24h=... path=... latest_rank_estimate=1/256 latest_miners_beaten=255 latest_percentile_beaten=99.61% latest_top10_mean=... latest_top10_median=... latest_top10_std=... gap_vs_latest_mean=... gap_vs_latest_median=... http_latency=... node_latency=... forecast_dir=...
 ```
 
 `http_latency` and `node_latency` come from the forecast metadata saved at
@@ -740,7 +740,7 @@ cutoff: model data cutoff returned by the private node
 The green CRPS line is emitted after every origin is scored:
 
 ```text
-[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... latest_top10_mean=... latest_top10_median=... latest_top10_std=... gap_vs_latest_mean=... gap_vs_latest_median=... http_latency=... node_latency=... shape=(250, 289)
+[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... latest_rank_estimate=1/256 latest_miners_beaten=255 latest_percentile_beaten=99.61% latest_top10_mean=... latest_top10_median=... latest_top10_std=... gap_vs_latest_mean=... gap_vs_latest_median=... http_latency=... node_latency=... shape=(250, 289)
 ```
 
 Fields:
@@ -749,6 +749,9 @@ Fields:
 raw: combined Synth-style CRPS score
 5m / 30m / 3h / 24h / path: CRPS components
 latest_top10_mean / latest_top10_median / latest_top10_std: latest top-10 valid Synth miner CRPS statistics
+latest_rank_estimate: our estimated rank among valid miners in the latest Synth score snapshot
+latest_miners_beaten: count of valid latest miners with worse CRPS than ours
+latest_percentile_beaten: percentage of valid latest miners with worse CRPS than ours
 gap_vs_latest_mean: our raw CRPS minus latest top-10 mean CRPS
 gap_vs_latest_median: our raw CRPS minus latest top-10 median CRPS
 http_latency: public harness HTTP round-trip time for this forecast
