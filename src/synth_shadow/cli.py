@@ -65,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["polygon", "synth"],
         help="Origin source for rolling backtest prompts.",
     )
+    parser.add_argument(
+        "--backtest-maturity-lag-minutes",
+        type=float,
+        help="Minutes to lag latest Synth backtest origin so realized paths and scores are published.",
+    )
     return parser
 
 
@@ -110,6 +115,7 @@ def main() -> None:
             num_paths=args.backtest_num_paths,
             realized_source=args.backtest_realized_source,
             origin_source=args.backtest_origin_source,
+            maturity_lag_minutes=args.backtest_maturity_lag_minutes,
         )
     elif args.command == "run-synth-shadow":
         result = run_shadow_cycle(config)

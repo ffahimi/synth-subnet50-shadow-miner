@@ -253,6 +253,7 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         "days": audit_days,
         "stride_minutes": stride_minutes,
         "num_paths": num_paths,
+        "maturity_lag_minutes": 60,
         "origin_source": "polygon",
         "realized_source": "polygon",
     }
@@ -433,7 +434,7 @@ def test_synth_realized_source_loads_realized_path(monkeypatch):
             calls.append(config["asset"])
 
         def realized_path(self, start_time):
-            assert start_time == "2026-07-10T03:00:00+00:00"
+            assert start_time == "2026-07-10T03:00:00Z"
             return {"real_prices": [100.0, 101.0, 102.0]}
 
     monkeypatch.setattr(rolling, "SynthClient", FakeSynthClient)
@@ -460,6 +461,7 @@ def test_synth_origin_source_uses_official_prompt_times(monkeypatch):
     features = pd.DataFrame({"timestamp": feature_times})
     config = {
         "asset": "BTC",
+        "backtest": {"maturity_lag_minutes": 0},
         "forecast": {"horizon_seconds": 600, "interval_seconds": 300},
     }
     prompts_seen = []

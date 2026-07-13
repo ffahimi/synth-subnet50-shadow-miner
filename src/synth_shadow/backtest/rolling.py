@@ -41,6 +41,7 @@ def run_rolling_backtest(
     num_paths: int | None = None,
     realized_source: str | None = None,
     origin_source: str | None = None,
+    maturity_lag_minutes: float | None = None,
 ) -> dict[str, Any]:
     """Run a rolling 24h historical forecast backtest.
 
@@ -65,6 +66,8 @@ def run_rolling_backtest(
         run_config["backtest"]["realized_source"] = realized_source
     if origin_source is not None:
         run_config["backtest"]["origin_source"] = origin_source
+    if maturity_lag_minutes is not None:
+        run_config["backtest"]["maturity_lag_minutes"] = maturity_lag_minutes
     realized_source = str(run_config["backtest"].get("realized_source", "polygon")).lower()
     if realized_source not in {"polygon", "synth"}:
         raise ValueError("backtest.realized_source must be 'polygon' or 'synth'.")
@@ -323,6 +326,8 @@ def _select_origins(
 ) -> list[pd.Timestamp]:
     horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
     latest_matured_origin = features["timestamp"].max() - horizon
+    if origin_source == "synth":
+        latest_matured_origin -= _maturity_lag(config)
     first_origin = latest_matured_origin - pd.Timedelta(days=days)
     if origin_source == "synth":
         origins = _select_synth_prompt_origins(
@@ -375,7 +380,7 @@ def _load_realized_path_for_origin(
 ) -> np.ndarray:
     if realized_source == "polygon":
         return polygon_future["close"].to_numpy(dtype=float)
-    payload = SynthClient(config).realized_path(_format_origin(origin))
+    payload = SynthClient(config).realized_path(_format_synth_time(origin))
     realized = np.asarray(payload.get("real_prices", []), dtype=float)
     if realized.shape[0] != points_per_path:
         raise ValueError(
@@ -472,6 +477,10 @@ def _format_origin(origin: pd.Timestamp) -> str:
     return _utc_timestamp(origin).isoformat()
 
 
+def _format_synth_time(origin: pd.Timestamp) -> str:
+    return _utc_timestamp(origin).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _utc_timestamp(value: Any) -> pd.Timestamp:
     ts = pd.Timestamp(value)
     if ts.tzinfo is None:
@@ -509,6 +518,7 @@ def _summarize_backtest(
             "days": config["backtest"]["days"],
             "stride_minutes": config["backtest"]["stride_minutes"],
             "num_paths": config["forecast"]["num_paths"],
+            "maturity_lag_minutes": config["backtest"].get("maturity_lag_minutes", 0),
             "origin_source": config["backtest"].get("origin_source", "polygon"),
             "realized_source": config["backtest"].get("realized_source", "polygon"),
         },
@@ -645,6 +655,12 @@ def _score_match_time(origin: pd.Timestamp, config: dict | None = None) -> pd.Ti
 def _historical_score_tolerance(config: dict, stride_minutes: int) -> pd.Timedelta:
     configured = config.get("backtest", {}).get("historical_score_tolerance_minutes")
     minutes = float(configured) if configured not in (None, "") else max(float(stride_minutes), 30.0)
+    return pd.Timedelta(minutes=minutes)
+
+
+def _maturity_lag(config: dict) -> pd.Timedelta:
+    configured = config.get("backtest", {}).get("maturity_lag_minutes", 0)
+    minutes = float(configured) if configured not in (None, "") else 0.0
     return pd.Timedelta(minutes=minutes)
 
 

@@ -670,6 +670,7 @@ origin stride: every 5 minutes
 forecast horizon: 24h
 realized source: Polygon close path
 origin source: Polygon 5-minute bars
+Synth maturity lag: 60 minutes
 paths per origin: config default, currently 250 for backtest
 ```
 
@@ -687,6 +688,7 @@ synth-shadow backtest-rolling \
   --debug \
   --backtest-origin-source synth \
   --backtest-realized-source synth \
+  --backtest-maturity-lag-minutes 60 \
   --backtest-max-origins 3 \
   --backtest-num-paths 16
 ```
@@ -697,6 +699,9 @@ and useful for market-data sanity checks. Use
 `historical_rank` against miner scores. Synth realized paths are only available
 for official Synth prompt starts; if you request Synth realized paths for
 arbitrary Polygon origins, the API can return `404 Not Found`.
+The default `backtest.maturity_lag_minutes` is 60 because Synth realized paths
+and score snapshots can publish after the 24h horizon has ended. Increase it if
+recent prompt origins still return `404`.
 
 If `SYNTH_MODEL_ENDPOINT` or `model.endpoint` is set, `backtest-rolling` uses the
 HTTP inference node instead of the local in-process model. For each historical
@@ -809,6 +814,7 @@ synth-shadow backtest-rolling \
   --debug \
   --backtest-origin-source synth \
   --backtest-realized-source synth \
+  --backtest-maturity-lag-minutes 60 \
   --backtest-max-origins 3 \
   --backtest-num-paths 16
 ```
@@ -821,6 +827,7 @@ synth-shadow backtest-rolling \
   --debug \
   --backtest-origin-source synth \
   --backtest-realized-source synth \
+  --backtest-maturity-lag-minutes 60 \
   --backtest-days 193 \
   --backtest-stride-minutes 60 \
   --backtest-num-paths 250

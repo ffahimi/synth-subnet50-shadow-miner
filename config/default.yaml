@@ -50,6 +50,7 @@ backtest:
   num_paths: 250
   compare_miners: 4
   historical_score_tolerance_minutes: 30
+  maturity_lag_minutes: 60
   origin_source: polygon
   realized_source: polygon
 
