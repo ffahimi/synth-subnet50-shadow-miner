@@ -959,6 +959,53 @@ def test_historical_scores_file_replaces_score_api(monkeypatch, tmp_path):
     assert [row["miner_uid"] for row in grouped[pd.Timestamp("2026-07-10T02:35:00Z")]] == [1, 2]
 
 
+def test_historical_scores_file_loads_full_days_for_same_day_matching(tmp_path):
+    csv_path = tmp_path / "btc_historical_scores.csv"
+    pd.DataFrame(
+        [
+            {
+                "miner_uid": 1,
+                "asset": "BTC",
+                "time_length": 86400,
+                "scored_time": "2026-07-13T13:01:00Z",
+                "crps": 2500.0,
+            },
+            {
+                "miner_uid": 2,
+                "asset": "BTC",
+                "time_length": 86400,
+                "scored_time": "2026-07-13T13:01:00Z",
+                "crps": 2600.0,
+            },
+        ]
+    ).to_csv(csv_path, index=False)
+    config = {
+        "asset": "BTC",
+        "backtest": {
+            "historical_scores_file": str(csv_path),
+            "historical_score_tolerance_minutes": 30,
+        },
+        "forecast": {"horizon_seconds": 86400, "interval_seconds": 300},
+    }
+    origin = pd.Timestamp("2026-07-12T17:25:00Z")
+
+    grouped = rolling._historical_miner_scores_for_origins(
+        config,
+        [origin],
+        stride_minutes=240,
+    )
+    matched = rolling._nearest_historical_miner_scores(
+        origin,
+        grouped,
+        tolerance=rolling._historical_score_tolerance(config, 240),
+        config=config,
+    )
+
+    assert matched is not None
+    assert matched["match_type"] == "same_day"
+    assert len(matched["scores"]) == 2
+
+
 def test_historical_score_fetch_chunks_long_windows(monkeypatch):
     calls = []
     config = {

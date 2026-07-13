@@ -1030,14 +1030,23 @@ def _read_historical_score_rows_from_file(
 
     start_utc = _utc_timestamp(start)
     end_utc = _utc_timestamp(end)
-    frame = frame[(frame["scored_time"] >= start_utc) & (frame["scored_time"] <= end_utc)].copy()
+    # Local research exports are cheap to scan and often have sparse score times.
+    # Keep whole UTC days so nearest-score matching can fall back to same-day snapshots.
+    file_start = start_utc.floor("D")
+    file_end = end_utc.ceil("D")
+    frame = frame[(frame["scored_time"] >= file_start) & (frame["scored_time"] < file_end)].copy()
     LOG.info(
-        "Loaded historical miner scores from file context=%s path=%s rows=%s start=%s end=%s",
+        (
+            "Loaded historical miner scores from file context=%s path=%s rows=%s "
+            "requested_start=%s requested_end=%s file_start=%s file_end=%s"
+        ),
         context,
         path,
         len(frame),
         start_utc,
         end_utc,
+        file_start,
+        file_end,
     )
     return frame.to_dict("records")
 
