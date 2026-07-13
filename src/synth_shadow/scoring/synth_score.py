@@ -16,7 +16,7 @@ def compare_to_miners(raw_crps: float, miner_scores: list[dict[str, Any]]) -> di
         [float(row["crps"]) for row in miner_scores if row.get("crps") is not None],
         dtype=float,
     )
-    crps_values = crps_values[np.isfinite(crps_values)]
+    crps_values = crps_values[np.isfinite(crps_values) & (crps_values >= 0)]
     if crps_values.size == 0:
         return {
             "miner_count": 0,
@@ -48,7 +48,7 @@ def compare_to_miners(raw_crps: float, miner_scores: list[dict[str, Any]]) -> di
 
 
 def top_miner_crps_stats(miner_scores: list[dict[str, Any]], count: int = 10) -> dict[str, Any]:
-    """Summarize the top N finite miner CRPS values."""
+    """Summarize the top N finite, non-negative miner CRPS values."""
     valid = [
         {
             "miner_uid": row.get("miner_uid"),
@@ -56,7 +56,9 @@ def top_miner_crps_stats(miner_scores: list[dict[str, Any]], count: int = 10) ->
             "scored_time": row.get("scored_time"),
         }
         for row in miner_scores
-        if row.get("crps") is not None and np.isfinite(float(row["crps"]))
+        if row.get("crps") is not None
+        and np.isfinite(float(row["crps"]))
+        and float(row["crps"]) >= 0
     ]
     top = sorted(valid, key=lambda row: row["crps"])[:count]
     if not top:

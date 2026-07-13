@@ -98,7 +98,10 @@ def run_rolling_backtest(
     if top10_stats["count"]:
         colored_debug(
             LOG,
-            "[TOP10 MINERS] asset=%s count=%s mean=%.6f median=%.6f std=%.6f min=%.6f max=%.6f scored_time=%s",
+            (
+                "[LATEST TOP10 MINERS] asset=%s count=%s mean=%.6f median=%.6f "
+                "std=%.6f min=%.6f max=%.6f scored_time=%s"
+            ),
             run_config["asset"],
             top10_stats["count"],
             top10_stats["mean"],
@@ -169,7 +172,8 @@ def run_rolling_backtest(
                 (
                     "[BACKTEST CRPS] asset=%s origin=%s raw=%.6f "
                     "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
-                    "top10_mean=%s top10_median=%s top10_std=%s gap_mean=%s gap_median=%s "
+                    "latest_top10_mean=%s latest_top10_median=%s latest_top10_std=%s "
+                    "gap_vs_latest_mean=%s gap_vs_latest_median=%s "
                     "http_latency=%s node_latency=%s shape=%s"
                 ),
                 run_config["asset"],

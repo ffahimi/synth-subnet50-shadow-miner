@@ -594,7 +594,7 @@ When a live forecast later matures and `score-matured --debug` or
 `run-synth-shadow-sanity --debug` scores it, the scorer prints a green line:
 
 ```text
-[LIVE CRPS] asset=BTC prompt_start=... raw=... 5m=... 30m=... 3h=... 24h=... path=... top10_mean=... top10_median=... top10_std=... gap_mean=... gap_median=... http_latency=... node_latency=... forecast_dir=...
+[LIVE CRPS] asset=BTC prompt_start=... raw=... 5m=... 30m=... 3h=... 24h=... path=... latest_top10_mean=... latest_top10_median=... latest_top10_std=... gap_vs_latest_mean=... gap_vs_latest_median=... http_latency=... node_latency=... forecast_dir=...
 ```
 
 `http_latency` and `node_latency` come from the forecast metadata saved at
@@ -740,7 +740,7 @@ cutoff: model data cutoff returned by the private node
 The green CRPS line is emitted after every origin is scored:
 
 ```text
-[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... top10_mean=... top10_median=... top10_std=... gap_mean=... gap_median=... http_latency=... node_latency=... shape=(250, 289)
+[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... latest_top10_mean=... latest_top10_median=... latest_top10_std=... gap_vs_latest_mean=... gap_vs_latest_median=... http_latency=... node_latency=... shape=(250, 289)
 ```
 
 Fields:
@@ -748,9 +748,9 @@ Fields:
 ```text
 raw: combined Synth-style CRPS score
 5m / 30m / 3h / 24h / path: CRPS components
-top10_mean / top10_median / top10_std: latest top-10 valid Synth miner CRPS statistics
-gap_mean: our raw CRPS minus top-10 mean CRPS
-gap_median: our raw CRPS minus top-10 median CRPS
+latest_top10_mean / latest_top10_median / latest_top10_std: latest top-10 valid Synth miner CRPS statistics
+gap_vs_latest_mean: our raw CRPS minus latest top-10 mean CRPS
+gap_vs_latest_median: our raw CRPS minus latest top-10 median CRPS
 http_latency: public harness HTTP round-trip time for this forecast
 node_latency: private node total latency, if returned
 shape: returned forecast matrix shape, expected (num_paths, 289)
@@ -760,8 +760,14 @@ The yellow top-miner summary is fetched once at the beginning of the backtest,
 so the debug loop does not call Synth on every origin:
 
 ```text
-[TOP10 MINERS] asset=BTC count=10 mean=... median=... std=... min=... max=... scored_time=...
+[LATEST TOP10 MINERS] asset=BTC count=10 mean=... median=... std=... min=... max=... scored_time=...
 ```
+
+This is a latest-board comparison, not a same-origin historical miner
+comparison. It is useful as a rough scale check while a backtest is running.
+For exact historical comparison against top miners at each origin, fetch Synth
+historical scores for the same prompt/scored time and join them per origin.
+Invalid sentinel CRPS values such as `-1` are filtered out.
 
 Smoke-test the debug lines with the private inference node:
 

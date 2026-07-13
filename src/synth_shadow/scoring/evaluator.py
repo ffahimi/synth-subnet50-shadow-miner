@@ -61,7 +61,8 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
         (
             "[LIVE CRPS] asset=%s prompt_start=%s raw=%.6f "
             "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
-            "top10_mean=%s top10_median=%s top10_std=%s gap_mean=%s gap_median=%s "
+            "latest_top10_mean=%s latest_top10_median=%s latest_top10_std=%s "
+            "gap_vs_latest_mean=%s gap_vs_latest_median=%s "
             "http_latency=%s node_latency=%s forecast_dir=%s"
         ),
         metadata.get("asset", config["asset"]),
