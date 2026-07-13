@@ -40,6 +40,7 @@ def run_rolling_backtest(
     max_origins: int | None = None,
     num_paths: int | None = None,
     realized_source: str | None = None,
+    origin_source: str | None = None,
 ) -> dict[str, Any]:
     """Run a rolling 24h historical forecast backtest.
 
@@ -62,24 +63,33 @@ def run_rolling_backtest(
     run_config["forecast"]["num_paths"] = num_paths
     if realized_source is not None:
         run_config["backtest"]["realized_source"] = realized_source
+    if origin_source is not None:
+        run_config["backtest"]["origin_source"] = origin_source
     realized_source = str(run_config["backtest"].get("realized_source", "polygon")).lower()
     if realized_source not in {"polygon", "synth"}:
         raise ValueError("backtest.realized_source must be 'polygon' or 'synth'.")
+    origin_source = str(run_config["backtest"].get("origin_source", "polygon")).lower()
+    if origin_source not in {"polygon", "synth"}:
+        raise ValueError("backtest.origin_source must be 'polygon' or 'synth'.")
 
     LOG.info(
-        "Starting %s rolling backtest days=%s stride_minutes=%s max_origins=%s num_paths=%s realized_source=%s",
+        (
+            "Starting %s rolling backtest days=%s stride_minutes=%s max_origins=%s "
+            "num_paths=%s realized_source=%s origin_source=%s"
+        ),
         config["asset"],
         days,
         stride_minutes,
         max_origins,
         num_paths,
         realized_source,
+        origin_source,
     )
 
     bars = _load_backtest_bars(run_config, days)
     interval_seconds = int(run_config["forecast"]["interval_seconds"])
     features = build_feature_frame(bars, run_config)
-    origins = _select_origins(features, run_config, days, stride_minutes, max_origins)
+    origins = _select_origins(features, run_config, days, stride_minutes, max_origins, origin_source)
     LOG.info(
         "%s backtest data ready bars=%s features=%s origins=%s first_origin=%s last_origin=%s",
         config["asset"],
@@ -137,7 +147,7 @@ def run_rolling_backtest(
         past_bars = bars[bars["timestamp"] <= origin].copy()
         past_features = features[features["timestamp"] <= origin].copy()
         future = bars[(bars["timestamp"] >= origin)].head(points_per_path)
-        if len(future) != points_per_path:
+        if realized_source == "polygon" and len(future) != points_per_path:
             LOG.warning("Skipping origin=%s, future path incomplete rows=%s", origin, len(future))
             continue
         try:
@@ -309,19 +319,51 @@ def _select_origins(
     days: float,
     stride_minutes: int,
     max_origins: int | None,
+    origin_source: str = "polygon",
 ) -> list[pd.Timestamp]:
     horizon = pd.Timedelta(seconds=int(config["forecast"]["horizon_seconds"]))
     latest_matured_origin = features["timestamp"].max() - horizon
     first_origin = latest_matured_origin - pd.Timedelta(days=days)
-    candidates = features[
-        (features["timestamp"] >= first_origin)
-        & (features["timestamp"] <= latest_matured_origin)
-    ]["timestamp"].tolist()
-    stride_bars = max(1, int(stride_minutes / (int(config["forecast"]["interval_seconds"]) / 60)))
-    origins = candidates[::stride_bars]
+    if origin_source == "synth":
+        origins = _select_synth_prompt_origins(
+            features,
+            config,
+            first_origin,
+            latest_matured_origin,
+        )
+    else:
+        candidates = features[
+            (features["timestamp"] >= first_origin)
+            & (features["timestamp"] <= latest_matured_origin)
+        ]["timestamp"].tolist()
+        stride_bars = max(1, int(stride_minutes / (int(config["forecast"]["interval_seconds"]) / 60)))
+        origins = candidates[::stride_bars]
     if max_origins is not None:
         origins = origins[-max_origins:]
     return [pd.Timestamp(origin) for origin in origins]
+
+
+def _select_synth_prompt_origins(
+    features: pd.DataFrame,
+    config: dict,
+    first_origin: pd.Timestamp,
+    latest_matured_origin: pd.Timestamp,
+) -> list[pd.Timestamp]:
+    prompts = SynthClient(config).prompts(start=first_origin, end=latest_matured_origin)
+    earliest_feature = features["timestamp"].min()
+    origins = []
+    for prompt in prompts:
+        ts = _utc_timestamp(prompt)
+        if first_origin <= ts <= latest_matured_origin and earliest_feature <= ts:
+            origins.append(ts)
+    LOG.info(
+        "Selected Synth prompt origins prompts=%s usable=%s first_origin=%s latest_matured_origin=%s",
+        len(prompts),
+        len(origins),
+        first_origin,
+        latest_matured_origin,
+    )
+    return origins
 
 
 def _load_realized_path_for_origin(
@@ -467,6 +509,7 @@ def _summarize_backtest(
             "days": config["backtest"]["days"],
             "stride_minutes": config["backtest"]["stride_minutes"],
             "num_paths": config["forecast"]["num_paths"],
+            "origin_source": config["backtest"].get("origin_source", "polygon"),
             "realized_source": config["backtest"].get("realized_source", "polygon"),
         },
     }

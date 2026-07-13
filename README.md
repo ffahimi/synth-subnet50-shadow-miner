@@ -669,6 +669,7 @@ backtest window: last 1 matured day
 origin stride: every 5 minutes
 forecast horizon: 24h
 realized source: Polygon close path
+origin source: Polygon 5-minute bars
 paths per origin: config default, currently 250 for backtest
 ```
 
@@ -678,20 +679,24 @@ generates a 24h forecast and scores it against the next 24h of realized Polygon
 closes.
 
 For fair comparison against Synth miner CRPS, score against Synth's realized
-path instead of Polygon closes:
+path instead of Polygon closes and use official Synth prompt origins:
 
 ```bash
 synth-shadow backtest-rolling \
   --asset BTC \
   --debug \
+  --backtest-origin-source synth \
   --backtest-realized-source synth \
   --backtest-max-origins 3 \
   --backtest-num-paths 16
 ```
 
-`polygon` remains the default realized source because it is faster and useful
-for market-data sanity checks. Use `synth` when reading `historical_rank`
-against miner scores.
+`polygon` remains the default origin and realized source because it is faster
+and useful for market-data sanity checks. Use
+`--backtest-origin-source synth --backtest-realized-source synth` when reading
+`historical_rank` against miner scores. Synth realized paths are only available
+for official Synth prompt starts; if you request Synth realized paths for
+arbitrary Polygon origins, the API can return `404 Not Found`.
 
 If `SYNTH_MODEL_ENDPOINT` or `model.endpoint` is set, `backtest-rolling` uses the
 HTTP inference node instead of the local in-process model. For each historical
@@ -802,6 +807,7 @@ export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
 synth-shadow backtest-rolling \
   --asset BTC \
   --debug \
+  --backtest-origin-source synth \
   --backtest-realized-source synth \
   --backtest-max-origins 3 \
   --backtest-num-paths 16
@@ -813,6 +819,7 @@ For a wider but still practical 2026-to-date sanity run, use hourly origins:
 synth-shadow backtest-rolling \
   --asset BTC \
   --debug \
+  --backtest-origin-source synth \
   --backtest-realized-source synth \
   --backtest-days 193 \
   --backtest-stride-minutes 60 \

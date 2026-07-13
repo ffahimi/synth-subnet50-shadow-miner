@@ -253,6 +253,8 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
         "days": audit_days,
         "stride_minutes": stride_minutes,
         "num_paths": num_paths,
+        "origin_source": "polygon",
+        "realized_source": "polygon",
     }
 
     origin_details = [
@@ -446,3 +448,50 @@ def test_synth_realized_source_loads_realized_path(monkeypatch):
 
     assert calls == ["BTC"]
     assert realized.tolist() == [100.0, 101.0, 102.0]
+
+
+def test_synth_origin_source_uses_official_prompt_times(monkeypatch):
+    feature_times = pd.date_range(
+        "2026-07-10T02:00:00Z",
+        periods=19,
+        freq="300s",
+        tz="UTC",
+    )
+    features = pd.DataFrame({"timestamp": feature_times})
+    config = {
+        "asset": "BTC",
+        "forecast": {"horizon_seconds": 600, "interval_seconds": 300},
+    }
+    prompts_seen = []
+
+    class FakeSynthClient:
+        def __init__(self, client_config):
+            assert client_config is config
+
+        def prompts(self, start=None, end=None):
+            prompts_seen.append((start, end))
+            return [
+                "2026-07-10T02:10:00Z",
+                "2026-07-10T03:01:00Z",
+                "2026-07-10T03:06:00Z",
+                "2026-07-10T03:25:00Z",
+            ]
+
+    monkeypatch.setattr(rolling, "SynthClient", FakeSynthClient)
+
+    origins = rolling._select_origins(
+        features,
+        config,
+        days=1 / 24,
+        stride_minutes=5,
+        max_origins=None,
+        origin_source="synth",
+    )
+
+    assert len(prompts_seen) == 1
+    assert prompts_seen[0][0] == pd.Timestamp("2026-07-10T02:20:00Z")
+    assert prompts_seen[0][1] == pd.Timestamp("2026-07-10T03:20:00Z")
+    assert origins == [
+        pd.Timestamp("2026-07-10T03:01:00Z"),
+        pd.Timestamp("2026-07-10T03:06:00Z"),
+    ]

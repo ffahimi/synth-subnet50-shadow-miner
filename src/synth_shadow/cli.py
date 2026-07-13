@@ -60,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["polygon", "synth"],
         help="Realized path source for rolling backtest scoring.",
     )
+    parser.add_argument(
+        "--backtest-origin-source",
+        choices=["polygon", "synth"],
+        help="Origin source for rolling backtest prompts.",
+    )
     return parser
 
 
@@ -104,6 +109,7 @@ def main() -> None:
             max_origins=args.backtest_max_origins,
             num_paths=args.backtest_num_paths,
             realized_source=args.backtest_realized_source,
+            origin_source=args.backtest_origin_source,
         )
     elif args.command == "run-synth-shadow":
         result = run_shadow_cycle(config)
