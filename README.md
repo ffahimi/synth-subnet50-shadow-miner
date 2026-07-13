@@ -321,7 +321,7 @@ Request field meanings:
 ```text
 asset: Synth asset symbol, for example BTC
 polygon_ticker: public ticker mapping, for example X:BTCUSD
-prompt_start_time: latest synced Synth prompt start, nullable
+prompt_start_time: latest synced Synth prompt start for live forecasts, or the backtest origin
 origin: historical forecast origin for backtests, nullable for live forecasts
 horizon_seconds: forecast horizon; currently 86400
 interval_seconds: output interval; currently 300
@@ -384,6 +384,17 @@ prices are finite and positive
 first timestamp equals data_cutoff
 first path price equals current_price
 ```
+
+For rolling backtests, stricter causal checks are applied:
+
+```text
+first timestamp must equal origin
+data_cutoff must be <= origin
+```
+
+That means a private inference node should anchor historical responses at the
+requested `origin`, use only source data at or before that time, and return the
+forecast path beginning exactly at that origin.
 
 The public harness saves this response as a normal forecast run:
 
@@ -672,6 +683,7 @@ realized source: Polygon close path
 origin source: Polygon 5-minute bars
 Synth maturity lag: 60 minutes
 paths per origin: config default, currently 250 for backtest
+miner comparison: enabled by config default, currently top 4; set --backtest-compare-miners 0 to skip Synth score history
 ```
 
 The backtest is causal: for each forecast origin, it uses only Polygon bars at
@@ -690,7 +702,8 @@ synth-shadow backtest-rolling \
   --backtest-realized-source synth \
   --backtest-maturity-lag-minutes 60 \
   --backtest-max-origins 3 \
-  --backtest-num-paths 16
+  --backtest-num-paths 16 \
+  --backtest-compare-miners 10
 ```
 
 `polygon` remains the default origin and realized source because it is faster
@@ -710,12 +723,18 @@ calls.
 
 If `SYNTH_MODEL_ENDPOINT` or `model.endpoint` is set, `backtest-rolling` uses the
 HTTP inference node instead of the local in-process model. For each historical
-origin it sends:
+origin it sends the same request contract as live mode, with `origin` included:
 
 ```json
 {
+  "asset": "BTC",
+  "polygon_ticker": "X:BTCUSD",
   "prompt_start_time": "2026-07-10T03:00:00+00:00",
-  "origin": "2026-07-10T03:00:00+00:00"
+  "origin": "2026-07-10T03:00:00+00:00",
+  "horizon_seconds": 86400,
+  "interval_seconds": 300,
+  "num_paths": 250,
+  "generated_at": "2026-07-13T18:29:01+00:00"
 }
 ```
 
@@ -747,6 +766,20 @@ synth-shadow backtest-rolling \
   --backtest-stride-minutes 60
 ```
 
+Useful backtest flags:
+
+```text
+--backtest-days N: number of matured historical days to scan
+--backtest-stride-minutes N: origin spacing; 240 means one forecast every 4 hours
+--backtest-max-origins N: stop after N scored origins
+--backtest-num-paths N: probabilistic paths requested from the model per origin
+--backtest-origin-source polygon|synth: choose arbitrary Polygon origins or official Synth prompt/score origins
+--backtest-realized-source polygon|synth: score against Polygon closes or Synth realized paths
+--backtest-maturity-lag-minutes N: avoid too-recent Synth origins whose realized paths/scores may not be published
+--backtest-checkpoint-every N: rewrite rolling_results.csv and summary.json every N scored origins
+--backtest-compare-miners N: fetch historical miner snapshots and rank against top N; use 0 to skip Synth score-history fetching
+```
+
 ### Colored Debug Lines
 
 When `--debug` is enabled, backtests print colored checkpoint lines for each
@@ -771,7 +804,7 @@ cutoff: model data cutoff returned by the private node
 The green CRPS line is emitted after every origin is scored:
 
 ```text
-[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... historical_rank=12/244 historical_miners_beaten=232 historical_percentile_beaten=95.08% target_scored_time=... matched_scored_time=... score_time_delta_min=0.00 historical_top10_mean=... historical_top10_median=... historical_top10_std=... gap_vs_historical_mean=... gap_vs_historical_median=... http_latency=... node_latency=... shape=(250, 289)
+[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... historical_rank=12/244 historical_miners_beaten=232 historical_percentile_beaten=95.08% target_scored_time=... matched_scored_time=... score_time_delta_min=0.00 score_match_type=nearest_tolerance historical_top10_mean=... historical_top10_median=... historical_top10_std=... gap_vs_historical_mean=... gap_vs_historical_median=... http_latency=... node_latency=... shape=(250, 289)
 ```
 
 Fields:
@@ -827,22 +860,44 @@ synth-shadow backtest-rolling \
   --backtest-realized-source synth \
   --backtest-maturity-lag-minutes 60 \
   --backtest-max-origins 3 \
-  --backtest-num-paths 16
+  --backtest-num-paths 16 \
+  --backtest-compare-miners 10
 ```
 
-For a wider but still practical 2026-to-date sanity run, use hourly origins:
+For a 2026-to-date ranking run from approximately January 1, 2026 through
+July 13, 2026, use 4-hour origins. This keeps the run large enough for
+statistics but much lighter than 5-minute origins:
 
 ```bash
-synth-shadow backtest-rolling \
+export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
+
+.venv/bin/python -m synth_shadow.cli backtest-rolling \
   --asset BTC \
   --debug \
   --backtest-origin-source synth \
   --backtest-realized-source synth \
   --backtest-maturity-lag-minutes 60 \
   --backtest-days 193 \
-  --backtest-stride-minutes 60 \
+  --backtest-stride-minutes 240 \
+  --backtest-num-paths 64 \
+  --backtest-checkpoint-every 10 \
+  --backtest-compare-miners 10
+```
+
+For a long CRPS-only relevance run without miner ranking, skip Synth score
+history fetching:
+
+```bash
+export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
+
+.venv/bin/python -m synth_shadow.cli backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-days 193 \
+  --backtest-stride-minutes 240 \
+  --backtest-num-paths 64 \
   --backtest-checkpoint-every 25 \
-  --backtest-num-paths 250
+  --backtest-compare-miners 0
 ```
 
 For a long inference-node run in `screen`, use a larger origin count and let the
@@ -860,7 +915,8 @@ export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
   --backtest-days 30 \
   --backtest-max-origins 200 \
   --backtest-num-paths 64 \
-  --backtest-checkpoint-every 10
+  --backtest-checkpoint-every 10 \
+  --backtest-compare-miners 10
 ```
 
 The output directory is logged before scoring begins. During long runs,
