@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import requests
 
 from synth_shadow.data.polygon_client import PolygonClient
 from synth_shadow.data.schema import repair_missing_bars
@@ -92,7 +93,17 @@ def run_rolling_backtest(
     bars = _load_backtest_bars(run_config, days)
     interval_seconds = int(run_config["forecast"]["interval_seconds"])
     features = build_feature_frame(bars, run_config)
-    origins = _select_origins(features, run_config, days, stride_minutes, max_origins, origin_source)
+    selection_max_origins = _selection_max_origins(max_origins, origin_source, realized_source, run_config)
+    origins = _select_origins(
+        features,
+        run_config,
+        days,
+        stride_minutes,
+        selection_max_origins,
+        origin_source,
+    )
+    if max_origins is not None and origin_source == "synth" and realized_source == "synth":
+        origins = list(reversed(origins))
     LOG.info(
         "%s backtest data ready bars=%s features=%s origins=%s first_origin=%s last_origin=%s",
         config["asset"],
@@ -154,6 +165,13 @@ def run_rolling_backtest(
             LOG.warning("Skipping origin=%s, future path incomplete rows=%s", origin, len(future))
             continue
         try:
+            realized = _load_realized_path_for_origin(
+                run_config,
+                origin,
+                future,
+                points_per_path,
+                realized_source,
+            )
             if provider:
                 output = provider.generate(
                     run_config,
@@ -189,13 +207,6 @@ def run_rolling_backtest(
                 )
                 paths = output.paths
                 current_price = state.price
-            realized = _load_realized_path_for_origin(
-                run_config,
-                origin,
-                future,
-                points_per_path,
-                realized_source,
-            )
             score = score_synth_btc_24h(paths, realized)
             row = {
                 "origin": str(origin),
@@ -276,6 +287,18 @@ def run_rolling_backtest(
             )
             if idx == 1 or idx % 12 == 0 or idx == len(origins):
                 LOG.debug("Backtest checkpoint %s/%s: %s", idx, len(origins), row)
+            if max_origins is not None and len(rows) >= max_origins:
+                LOG.info("Reached requested scored origin limit max_origins=%s", max_origins)
+                break
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if realized_source == "synth" and status_code == 404:
+                LOG.warning(
+                    "Skipping origin=%s because Synth realized path is not available yet.",
+                    origin,
+                )
+                continue
+            raise
         except Exception as exc:  # noqa: BLE001 - keep rolling backtest moving.
             LOG.warning("Backtest origin failed origin=%s error=%s", origin, exc)
 
@@ -581,8 +604,9 @@ def _historical_miner_scores_for_origins(
     if not origins:
         return {}
     tolerance = _historical_score_tolerance(config, stride_minutes)
-    start = _score_match_time(origins[0], config) - tolerance
-    end = _score_match_time(origins[-1], config) + tolerance
+    scored_times = [_score_match_time(origin, config) for origin in origins]
+    start = min(scored_times) - tolerance
+    end = max(scored_times) + tolerance
     chunk_hours = float(config.get("backtest", {}).get("historical_score_chunk_hours", 24))
     client = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90)))
     rows: list[dict[str, Any]] = []
@@ -662,6 +686,18 @@ def _maturity_lag(config: dict) -> pd.Timedelta:
     configured = config.get("backtest", {}).get("maturity_lag_minutes", 0)
     minutes = float(configured) if configured not in (None, "") else 0.0
     return pd.Timedelta(minutes=minutes)
+
+
+def _selection_max_origins(
+    max_origins: int | None,
+    origin_source: str,
+    realized_source: str,
+    config: dict,
+) -> int | None:
+    if max_origins is None or origin_source != "synth" or realized_source != "synth":
+        return max_origins
+    multiplier = int(config.get("backtest", {}).get("synth_realized_scan_multiplier", 24))
+    return max(max_origins, max_origins * max(1, multiplier))
 
 
 def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:

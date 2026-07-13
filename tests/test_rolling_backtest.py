@@ -451,6 +451,119 @@ def test_synth_realized_source_loads_realized_path(monkeypatch):
     assert realized.tolist() == [100.0, 101.0, 102.0]
 
 
+def test_synth_backtest_skips_unavailable_realized_before_provider(monkeypatch, tmp_path):
+    older_origin = pd.Timestamp("2026-07-10T03:00:00Z")
+    newer_origin = pd.Timestamp("2026-07-10T03:05:00Z")
+    interval_seconds = 300
+    horizon_seconds = 600
+    expected_points = 3
+    timestamps = pd.date_range(
+        older_origin - pd.Timedelta(minutes=20),
+        periods=10,
+        freq="300s",
+        tz="UTC",
+    )
+    bars = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(99.0, 108.0, len(timestamps)),
+            "high": np.linspace(100.0, 109.0, len(timestamps)),
+            "low": np.linspace(98.0, 107.0, len(timestamps)),
+            "close": np.linspace(100.0, 109.0, len(timestamps)),
+            "volume": np.ones(len(timestamps)),
+        }
+    )
+    features = pd.DataFrame({"timestamp": timestamps})
+    provider_calls = []
+
+    config = {
+        "asset": "BTC",
+        "polygon_ticker": "X:BTCUSD",
+        "history": {"lookback_days": 1},
+        "forecast": {
+            "horizon_seconds": horizon_seconds,
+            "interval_seconds": interval_seconds,
+            "num_paths": 2,
+            "random_seed": 7,
+        },
+        "sampling": {"block_minutes": 60},
+        "model": {"endpoint": "http://127.0.0.1:8088/predict"},
+        "backtest": {
+            "days": 1,
+            "stride_minutes": 5,
+            "max_origins": 1,
+            "num_paths": 2,
+            "compare_miners": 4,
+            "origin_source": "synth",
+            "realized_source": "synth",
+            "synth_realized_scan_multiplier": 24,
+        },
+        "storage": {"backtest_dir": str(tmp_path / "backtests")},
+    }
+
+    class FakeProvider:
+        def generate(self, run_config, prompt_start_time=None, origin=None):
+            provider_calls.append(pd.Timestamp(origin))
+            paths = np.array([[104.0, 105.0, 106.0], [104.0, 103.0, 102.0]])
+            return ProviderForecast(
+                paths=paths,
+                timestamps=pd.date_range(origin, periods=expected_points, freq="300s", tz="UTC"),
+                metadata={
+                    "provider": "http",
+                    "model_version": "private_http_backtest_v1",
+                    "model_entrypoint": "http://127.0.0.1:8088/predict",
+                    "data_cutoff": str(origin),
+                    "current_price": 104.0,
+                },
+            )
+
+    class FakeSynthClient:
+        def __init__(self, _config, timeout_seconds=30):
+            pass
+
+        def realized_path(self, start_time):
+            if start_time == "2026-07-10T03:05:00Z":
+                response = requests.Response()
+                response.status_code = 404
+                raise requests.HTTPError("404 Client Error", response=response)
+            assert start_time == "2026-07-10T03:00:00Z"
+            return {"real_prices": [104.0, 105.0, 106.0]}
+
+    def fake_select_origins(_features, _config, _days, _stride, selection_max, _origin_source):
+        assert selection_max == 24
+        return [older_origin, newer_origin]
+
+    monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: bars)
+    monkeypatch.setattr(rolling, "build_feature_frame", lambda _bars, _config: features)
+    monkeypatch.setattr(rolling, "_select_origins", fake_select_origins)
+    monkeypatch.setattr(rolling, "load_forecast_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(rolling, "SynthClient", FakeSynthClient)
+    monkeypatch.setattr(rolling, "score_synth_btc_24h", lambda _paths, _realized: {
+        "raw_crps": 2.0,
+        "components": {
+            "crps_5m": 0.1,
+            "crps_30m": 0.2,
+            "crps_3h": 0.3,
+            "crps_24h": 0.4,
+            "crps_path_price": 0.5,
+        },
+    })
+    monkeypatch.setattr(rolling, "_historical_miner_scores_for_origins", lambda *_args: {})
+
+    result = rolling.run_rolling_backtest(
+        config,
+        max_origins=1,
+        num_paths=2,
+        realized_source="synth",
+        origin_source="synth",
+    )
+
+    assert provider_calls == [older_origin]
+    assert result["summary"]["origin_count"] == 1
+    assert result["first_rows"][0]["origin"] == str(older_origin)
+    assert result["first_rows"][0]["realized_source"] == "synth"
+
+
 def test_synth_origin_source_uses_official_prompt_times(monkeypatch):
     feature_times = pd.date_range(
         "2026-07-10T02:00:00Z",

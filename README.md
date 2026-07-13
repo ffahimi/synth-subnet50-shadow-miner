@@ -702,6 +702,11 @@ arbitrary Polygon origins, the API can return `404 Not Found`.
 The default `backtest.maturity_lag_minutes` is 60 because Synth realized paths
 and score snapshots can publish after the 24h horizon has ended. Increase it if
 recent prompt origins still return `404`.
+When Synth realized paths are requested, the backtest checks realized-path
+availability before calling the inference node. It scans up to
+`max_origins * backtest.synth_realized_scan_multiplier` recent Synth prompts
+and stops after it has scored `max_origins` available origins, so unavailable
+recent paths do not waste private-node inference calls.
 
 If `SYNTH_MODEL_ENDPOINT` or `model.endpoint` is set, `backtest-rolling` uses the
 HTTP inference node instead of the local in-process model. For each historical
