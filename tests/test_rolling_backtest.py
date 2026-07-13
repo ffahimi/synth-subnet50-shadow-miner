@@ -907,6 +907,58 @@ def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatc
     ]
 
 
+def test_historical_scores_file_replaces_score_api(monkeypatch, tmp_path):
+    csv_path = tmp_path / "btc_historical_scores.csv"
+    pd.DataFrame(
+        [
+            {
+                "miner_uid": 1,
+                "asset": "BTC",
+                "time_length": 600,
+                "scored_time": "2026-07-10T02:35:00Z",
+                "crps": 10.0,
+            },
+            {
+                "miner_uid": 2,
+                "asset": "BTC",
+                "time_length": 600,
+                "scored_time": "2026-07-10T02:35:00Z",
+                "crps": 11.0,
+            },
+            {
+                "miner_uid": 3,
+                "asset": "ETH",
+                "time_length": 600,
+                "scored_time": "2026-07-10T02:35:00Z",
+                "crps": 99.0,
+            },
+        ]
+    ).to_csv(csv_path, index=False)
+    config = {
+        "asset": "BTC",
+        "backtest": {"historical_scores_file": str(csv_path)},
+        "forecast": {"horizon_seconds": 600, "interval_seconds": 300},
+    }
+
+    class FailSynthClient:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("historical_scores_file should avoid Synth score API")
+
+    monkeypatch.setattr(rolling, "SynthClient", FailSynthClient)
+
+    rows = rolling._fetch_historical_score_rows(
+        config,
+        pd.Timestamp("2026-07-10T02:00:00Z"),
+        pd.Timestamp("2026-07-10T03:00:00Z"),
+        context="test",
+    )
+    grouped = rolling._group_score_rows(rows)
+
+    assert len(rows) == 2
+    assert list(grouped) == [pd.Timestamp("2026-07-10T02:35:00Z")]
+    assert [row["miner_uid"] for row in grouped[pd.Timestamp("2026-07-10T02:35:00Z")]] == [1, 2]
+
+
 def test_historical_score_fetch_chunks_long_windows(monkeypatch):
     calls = []
     config = {

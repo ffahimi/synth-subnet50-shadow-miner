@@ -779,6 +779,22 @@ Useful backtest flags:
 --backtest-maturity-lag-minutes N: avoid too-recent Synth origins whose realized paths/scores may not be published
 --backtest-checkpoint-every N: rewrite rolling_results.csv and summary.json every N scored origins
 --backtest-compare-miners N: fetch historical miner snapshots and rank against top N; use 0 to skip Synth score-history fetching
+--backtest-historical-scores-file PATH: use a local historical miner scores CSV instead of Synth score-history API
+```
+
+For a short run with no Synth API calls at all, use Polygon origins and Polygon
+realized paths:
+
+```bash
+synth-shadow backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-origin-source polygon \
+  --backtest-realized-source polygon \
+  --backtest-stride-minutes 60 \
+  --backtest-max-origins 3 \
+  --backtest-num-paths 16 \
+  --backtest-compare-miners 0
 ```
 
 For short private-node checks with Synth realized paths but without the slow
@@ -795,6 +811,22 @@ synth-shadow backtest-rolling \
   --backtest-max-origins 3 \
   --backtest-num-paths 16 \
   --backtest-compare-miners 0
+```
+
+To rank against a previously downloaded miner-score CSV without fetching score
+history again:
+
+```bash
+synth-shadow backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-origin-source polygon \
+  --backtest-realized-source polygon \
+  --backtest-stride-minutes 60 \
+  --backtest-max-origins 3 \
+  --backtest-num-paths 16 \
+  --backtest-compare-miners 10 \
+  --backtest-historical-scores-file data/top_miners_regime_research/btc_historical_scores.csv
 ```
 
 ### Colored Debug Lines

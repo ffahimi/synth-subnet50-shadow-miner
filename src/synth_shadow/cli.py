@@ -61,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of historical miners to compare against; use 0 to skip Synth score fetches.",
     )
     parser.add_argument(
+        "--backtest-historical-scores-file",
+        help="CSV file of previously downloaded Synth historical miner scores to use instead of the API.",
+    )
+    parser.add_argument(
         "--backtest-realized-source",
         choices=["polygon", "synth"],
         help="Realized path source for rolling backtest scoring.",
@@ -129,6 +133,7 @@ def main() -> None:
             max_origins=args.backtest_max_origins,
             num_paths=args.backtest_num_paths,
             compare_miners=args.backtest_compare_miners,
+            historical_scores_file=args.backtest_historical_scores_file,
             realized_source=args.backtest_realized_source,
             origin_source=args.backtest_origin_source,
             fast_origins=args.backtest_fast_origins,

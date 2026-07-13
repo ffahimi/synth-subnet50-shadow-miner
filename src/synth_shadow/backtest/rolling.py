@@ -45,6 +45,7 @@ def run_rolling_backtest(
     max_origins: int | None = None,
     num_paths: int | None = None,
     compare_miners: int | None = None,
+    historical_scores_file: str | None = None,
     realized_source: str | None = None,
     origin_source: str | None = None,
     fast_origins: bool | None = None,
@@ -72,6 +73,8 @@ def run_rolling_backtest(
     run_config["forecast"]["num_paths"] = num_paths
     if compare_miners is not None:
         run_config["backtest"]["compare_miners"] = int(compare_miners)
+    if historical_scores_file is not None:
+        run_config["backtest"]["historical_scores_file"] = historical_scores_file
     if realized_source is not None:
         run_config["backtest"]["realized_source"] = realized_source
     if origin_source is not None:
@@ -958,6 +961,16 @@ def _fetch_historical_score_rows(
     *,
     context: str,
 ) -> list[dict[str, Any]]:
+    historical_scores_file = config.get("backtest", {}).get("historical_scores_file")
+    if historical_scores_file:
+        return _read_historical_score_rows_from_file(
+            historical_scores_file,
+            config,
+            start,
+            end,
+            context=context,
+        )
+
     chunk_hours = float(config.get("backtest", {}).get("historical_score_chunk_hours", 24))
     client = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90)))
     rows: list[dict[str, Any]] = []
@@ -985,6 +998,48 @@ def _fetch_historical_score_rows(
             )
         cursor = chunk_end
     return rows
+
+
+def _read_historical_score_rows_from_file(
+    path_value: str | Path,
+    config: dict,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    context: str,
+) -> list[dict[str, Any]]:
+    path = Path(path_value).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"Historical scores file not found: {path}")
+    frame = pd.read_csv(path)
+    if "scored_time" not in frame.columns:
+        raise ValueError(f"Historical scores file must include scored_time: {path}")
+    if "crps" not in frame.columns:
+        raise ValueError(f"Historical scores file must include crps: {path}")
+
+    frame = frame.copy()
+    frame["scored_time"] = pd.to_datetime(frame["scored_time"], utc=True, errors="coerce")
+    frame["crps"] = pd.to_numeric(frame["crps"], errors="coerce")
+    frame = frame[frame["scored_time"].notna() & frame["crps"].notna()].copy()
+    frame = frame[np.isfinite(frame["crps"]) & (frame["crps"] >= 0)].copy()
+    if "asset" in frame.columns:
+        frame = frame[frame["asset"].astype(str).str.upper() == str(config["asset"]).upper()].copy()
+    if "time_length" in frame.columns:
+        horizon_seconds = int(config.get("forecast", {}).get("horizon_seconds", 86400))
+        frame = frame[pd.to_numeric(frame["time_length"], errors="coerce") == horizon_seconds].copy()
+
+    start_utc = _utc_timestamp(start)
+    end_utc = _utc_timestamp(end)
+    frame = frame[(frame["scored_time"] >= start_utc) & (frame["scored_time"] <= end_utc)].copy()
+    LOG.info(
+        "Loaded historical miner scores from file context=%s path=%s rows=%s start=%s end=%s",
+        context,
+        path,
+        len(frame),
+        start_utc,
+        end_utc,
+    )
+    return frame.to_dict("records")
 
 
 def _score_time(row: dict[str, Any]) -> pd.Timestamp | None:
