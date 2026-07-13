@@ -677,6 +677,22 @@ or before that origin to build features and the session-path library. It then
 generates a 24h forecast and scores it against the next 24h of realized Polygon
 closes.
 
+For fair comparison against Synth miner CRPS, score against Synth's realized
+path instead of Polygon closes:
+
+```bash
+synth-shadow backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-realized-source synth \
+  --backtest-max-origins 3 \
+  --backtest-num-paths 16
+```
+
+`polygon` remains the default realized source because it is faster and useful
+for market-data sanity checks. Use `synth` when reading `historical_rank`
+against miner scores.
+
 If `SYNTH_MODEL_ENDPOINT` or `model.endpoint` is set, `backtest-rolling` uses the
 HTTP inference node instead of the local in-process model. For each historical
 origin it sends:
@@ -691,7 +707,7 @@ origin it sends:
 The private node is then responsible for fetching/vectorizing only data at or
 before `origin`. The public harness validates that the returned first timestamp
 equals `origin` and that `data_cutoff` is not after `origin`, then scores the
-paths against the realized future Polygon close path.
+paths against the configured realized source.
 
 Run a heavier test with 1000 paths per origin:
 
@@ -786,6 +802,7 @@ export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
 synth-shadow backtest-rolling \
   --asset BTC \
   --debug \
+  --backtest-realized-source synth \
   --backtest-max-origins 3 \
   --backtest-num-paths 16
 ```
@@ -796,6 +813,7 @@ For a wider but still practical 2026-to-date sanity run, use hourly origins:
 synth-shadow backtest-rolling \
   --asset BTC \
   --debug \
+  --backtest-realized-source synth \
   --backtest-days 193 \
   --backtest-stride-minutes 60 \
   --backtest-num-paths 250

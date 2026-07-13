@@ -55,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backtest-stride-minutes", type=int, help="Rolling backtest origin stride.")
     parser.add_argument("--backtest-max-origins", type=int, help="Limit backtest origins for quick checks.")
     parser.add_argument("--backtest-num-paths", type=int, help="Override simulated paths per backtest origin.")
+    parser.add_argument(
+        "--backtest-realized-source",
+        choices=["polygon", "synth"],
+        help="Realized path source for rolling backtest scoring.",
+    )
     return parser
 
 
@@ -98,6 +103,7 @@ def main() -> None:
             stride_minutes=args.backtest_stride_minutes,
             max_origins=args.backtest_max_origins,
             num_paths=args.backtest_num_paths,
+            realized_source=args.backtest_realized_source,
         )
     elif args.command == "run-synth-shadow":
         result = run_shadow_cycle(config)

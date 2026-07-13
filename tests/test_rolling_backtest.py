@@ -335,6 +335,7 @@ def test_rolling_backtest_uses_http_provider_when_endpoint_configured(monkeypatc
             "max_origins": 1,
             "num_paths": 2,
             "compare_miners": 4,
+            "realized_source": "polygon",
         },
         "storage": {"backtest_dir": str(tmp_path / "backtests")},
     }
@@ -416,4 +417,32 @@ def test_rolling_backtest_uses_http_provider_when_endpoint_configured(monkeypatc
         "model_entrypoint": "http://127.0.0.1:8088/predict",
     }
     assert result["first_rows"][0]["current_price"] == 104.0
+    assert result["first_rows"][0]["realized_source"] == "polygon"
     assert result["historical_miner_snapshot"]["score_snapshot_count"] == 1
+
+
+def test_synth_realized_source_loads_realized_path(monkeypatch):
+    origin = pd.Timestamp("2026-07-10T03:00:00Z")
+    future = pd.DataFrame({"close": [1.0, 2.0, 3.0]})
+    calls = []
+
+    class FakeSynthClient:
+        def __init__(self, config):
+            calls.append(config["asset"])
+
+        def realized_path(self, start_time):
+            assert start_time == "2026-07-10T03:00:00+00:00"
+            return {"real_prices": [100.0, 101.0, 102.0]}
+
+    monkeypatch.setattr(rolling, "SynthClient", FakeSynthClient)
+
+    realized = rolling._load_realized_path_for_origin(
+        {"asset": "BTC"},
+        origin,
+        future,
+        points_per_path=3,
+        realized_source="synth",
+    )
+
+    assert calls == ["BTC"]
+    assert realized.tolist() == [100.0, 101.0, 102.0]

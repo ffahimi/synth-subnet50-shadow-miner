@@ -39,6 +39,7 @@ def run_rolling_backtest(
     stride_minutes: int | None = None,
     max_origins: int | None = None,
     num_paths: int | None = None,
+    realized_source: str | None = None,
 ) -> dict[str, Any]:
     """Run a rolling 24h historical forecast backtest.
 
@@ -59,14 +60,20 @@ def run_rolling_backtest(
     run_config["backtest"]["stride_minutes"] = stride_minutes
     run_config["backtest"]["max_origins"] = max_origins
     run_config["forecast"]["num_paths"] = num_paths
+    if realized_source is not None:
+        run_config["backtest"]["realized_source"] = realized_source
+    realized_source = str(run_config["backtest"].get("realized_source", "polygon")).lower()
+    if realized_source not in {"polygon", "synth"}:
+        raise ValueError("backtest.realized_source must be 'polygon' or 'synth'.")
 
     LOG.info(
-        "Starting %s rolling backtest days=%s stride_minutes=%s max_origins=%s num_paths=%s",
+        "Starting %s rolling backtest days=%s stride_minutes=%s max_origins=%s num_paths=%s realized_source=%s",
         config["asset"],
         days,
         stride_minutes,
         max_origins,
         num_paths,
+        realized_source,
     )
 
     bars = _load_backtest_bars(run_config, days)
@@ -169,12 +176,19 @@ def run_rolling_backtest(
                 )
                 paths = output.paths
                 current_price = state.price
-            realized = future["close"].to_numpy(dtype=float)
+            realized = _load_realized_path_for_origin(
+                run_config,
+                origin,
+                future,
+                points_per_path,
+                realized_source,
+            )
             score = score_synth_btc_24h(paths, realized)
             row = {
                 "origin": str(origin),
                 "current_price": current_price,
                 "realized_final": float(realized[-1]),
+                "realized_source": realized_source,
                 "forecast_final_median": float(np.median(paths[:, -1])),
                 "raw_crps": float(score["raw_crps"]),
                 **{name: float(value) for name, value in score["components"].items()},
@@ -310,6 +324,25 @@ def _select_origins(
     return [pd.Timestamp(origin) for origin in origins]
 
 
+def _load_realized_path_for_origin(
+    config: dict,
+    origin: pd.Timestamp,
+    polygon_future: pd.DataFrame,
+    points_per_path: int,
+    realized_source: str,
+) -> np.ndarray:
+    if realized_source == "polygon":
+        return polygon_future["close"].to_numpy(dtype=float)
+    payload = SynthClient(config).realized_path(_format_origin(origin))
+    realized = np.asarray(payload.get("real_prices", []), dtype=float)
+    if realized.shape[0] != points_per_path:
+        raise ValueError(
+            f"Synth realized path origin={origin} length {realized.shape[0]} "
+            f"does not match expected {points_per_path}."
+        )
+    return realized
+
+
 def _validate_http_backtest_output(output: ProviderForecast, origin: pd.Timestamp) -> None:
     origin = _utc_timestamp(origin)
     first_timestamp = _utc_timestamp(output.timestamps[0])
@@ -434,6 +467,7 @@ def _summarize_backtest(
             "days": config["backtest"]["days"],
             "stride_minutes": config["backtest"]["stride_minutes"],
             "num_paths": config["forecast"]["num_paths"],
+            "realized_source": config["backtest"].get("realized_source", "polygon"),
         },
     }
 
