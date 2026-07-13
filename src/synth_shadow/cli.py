@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Origin source for rolling backtest prompts.",
     )
     parser.add_argument(
+        "--backtest-fast-origins",
+        action="store_true",
+        help="Use local feature timestamps for quick backtests instead of fetching Synth score-origin history.",
+    )
+    parser.add_argument(
         "--backtest-maturity-lag-minutes",
         type=float,
         help="Minutes to lag latest Synth backtest origin so realized paths and scores are published.",
@@ -126,6 +131,7 @@ def main() -> None:
             compare_miners=args.backtest_compare_miners,
             realized_source=args.backtest_realized_source,
             origin_source=args.backtest_origin_source,
+            fast_origins=args.backtest_fast_origins,
             maturity_lag_minutes=args.backtest_maturity_lag_minutes,
             checkpoint_every=args.backtest_checkpoint_every,
         )

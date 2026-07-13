@@ -521,6 +521,98 @@ def test_rolling_backtest_can_skip_historical_miner_fetch(monkeypatch, tmp_path)
     assert result["first_rows"][0]["historical_miner_count"] == 0
 
 
+def test_fast_origins_bypasses_synth_score_origin_fetch(monkeypatch, tmp_path):
+    origin = pd.Timestamp("2026-07-10T03:00:00Z")
+    interval_seconds = 300
+    horizon_seconds = 600
+    timestamps = pd.date_range(origin - pd.Timedelta(minutes=20), periods=8, freq="300s", tz="UTC")
+    bars = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": np.linspace(99.0, 106.0, len(timestamps)),
+            "high": np.linspace(100.0, 107.0, len(timestamps)),
+            "low": np.linspace(98.0, 105.0, len(timestamps)),
+            "close": np.linspace(100.0, 107.0, len(timestamps)),
+            "volume": np.ones(len(timestamps)),
+        }
+    )
+    features = pd.DataFrame({"timestamp": timestamps})
+    config = {
+        "asset": "BTC",
+        "polygon_ticker": "X:BTCUSD",
+        "history": {"lookback_days": 1},
+        "forecast": {
+            "horizon_seconds": horizon_seconds,
+            "interval_seconds": interval_seconds,
+            "num_paths": 2,
+            "random_seed": 7,
+        },
+        "sampling": {"block_minutes": 60},
+        "model": {"endpoint": "http://127.0.0.1:8088/predict"},
+        "backtest": {
+            "days": 1,
+            "stride_minutes": 5,
+            "max_origins": 1,
+            "num_paths": 2,
+            "compare_miners": 0,
+            "origin_source": "synth",
+            "realized_source": "synth",
+        },
+        "storage": {"backtest_dir": str(tmp_path / "backtests")},
+    }
+    selected_origin_sources = []
+
+    class FakeProvider:
+        def generate(self, run_config, prompt_start_time=None, origin=None):
+            return ProviderForecast(
+                paths=np.array([[104.0, 105.0, 106.0], [104.0, 103.0, 102.0]]),
+                timestamps=pd.date_range(origin, periods=3, freq="300s", tz="UTC"),
+                metadata={"current_price": 104.0, "data_cutoff": str(origin)},
+            )
+
+    def fake_select_origins(
+        _features,
+        _config,
+        _days,
+        _stride_minutes,
+        _max_origins,
+        origin_source,
+        _realized_source,
+        _score_snapshot_cache,
+    ):
+        selected_origin_sources.append(origin_source)
+        return [origin]
+
+    def fail_historical_rows(*_args, **_kwargs):
+        raise AssertionError("fast_origins should avoid Synth historical score-origin fetches")
+
+    monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: bars)
+    monkeypatch.setattr(rolling, "build_feature_frame", lambda _bars, _config: features)
+    monkeypatch.setattr(rolling, "_select_origins", fake_select_origins)
+    monkeypatch.setattr(rolling, "_fetch_historical_score_rows", fail_historical_rows)
+    monkeypatch.setattr(rolling, "load_forecast_provider", lambda _config: FakeProvider())
+    monkeypatch.setattr(
+        rolling,
+        "_load_realized_path_for_origin",
+        lambda *_args, **_kwargs: np.array([104.0, 105.0, 106.0]),
+    )
+    monkeypatch.setattr(rolling, "score_synth_btc_24h", lambda _paths, _realized: {
+        "raw_crps": 2.0,
+        "components": {
+            "crps_5m": 0.1,
+            "crps_30m": 0.2,
+            "crps_3h": 0.3,
+            "crps_24h": 0.4,
+            "crps_path_price": 0.5,
+        },
+    })
+
+    result = rolling.run_rolling_backtest(config, compare_miners=0, fast_origins=True)
+
+    assert selected_origin_sources == ["polygon"]
+    assert result["summary"]["origin_count"] == 1
+
+
 def test_synth_realized_source_loads_realized_path(monkeypatch):
     origin = pd.Timestamp("2026-07-10T03:00:00Z")
     future = pd.DataFrame({"close": [1.0, 2.0, 3.0]})

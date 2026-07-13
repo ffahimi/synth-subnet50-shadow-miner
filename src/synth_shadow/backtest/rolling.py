@@ -47,6 +47,7 @@ def run_rolling_backtest(
     compare_miners: int | None = None,
     realized_source: str | None = None,
     origin_source: str | None = None,
+    fast_origins: bool | None = None,
     maturity_lag_minutes: float | None = None,
     checkpoint_every: int | None = None,
 ) -> dict[str, Any]:
@@ -75,6 +76,8 @@ def run_rolling_backtest(
         run_config["backtest"]["realized_source"] = realized_source
     if origin_source is not None:
         run_config["backtest"]["origin_source"] = origin_source
+    if fast_origins is not None:
+        run_config["backtest"]["fast_origins"] = bool(fast_origins)
     if maturity_lag_minutes is not None:
         run_config["backtest"]["maturity_lag_minutes"] = maturity_lag_minutes
     if checkpoint_every is not None:
@@ -85,11 +88,17 @@ def run_rolling_backtest(
     origin_source = str(run_config["backtest"].get("origin_source", "polygon")).lower()
     if origin_source not in {"polygon", "synth"}:
         raise ValueError("backtest.origin_source must be 'polygon' or 'synth'.")
+    fast_origins = bool(run_config["backtest"].get("fast_origins", False))
+    selection_origin_source = "polygon" if fast_origins else origin_source
+    if fast_origins and origin_source == "synth":
+        LOG.info(
+            "Using fast local feature origins instead of Synth origin selection for this backtest."
+        )
 
     LOG.info(
         (
             "Starting %s rolling backtest days=%s stride_minutes=%s max_origins=%s "
-            "num_paths=%s realized_source=%s origin_source=%s"
+            "num_paths=%s realized_source=%s origin_source=%s selection_origin_source=%s fast_origins=%s"
         ),
         config["asset"],
         days,
@@ -98,12 +107,14 @@ def run_rolling_backtest(
         num_paths,
         realized_source,
         origin_source,
+        selection_origin_source,
+        fast_origins,
     )
 
     bars = _load_backtest_bars(run_config, days)
     interval_seconds = int(run_config["forecast"]["interval_seconds"])
     features = build_feature_frame(bars, run_config)
-    selection_max_origins = _selection_max_origins(max_origins, origin_source, realized_source, run_config)
+    selection_max_origins = _selection_max_origins(max_origins, selection_origin_source, realized_source, run_config)
     score_snapshot_cache: dict[str, Any] = {}
     origins = _select_origins(
         features,
@@ -111,11 +122,11 @@ def run_rolling_backtest(
         days,
         stride_minutes,
         selection_max_origins,
-        origin_source,
+        selection_origin_source,
         realized_source,
         score_snapshot_cache,
     )
-    if max_origins is not None and origin_source == "synth" and realized_source == "synth":
+    if max_origins is not None and selection_origin_source == "synth" and realized_source == "synth":
         origins = list(reversed(origins))
     LOG.info(
         "%s backtest data ready bars=%s features=%s origins=%s first_origin=%s last_origin=%s",

@@ -774,10 +774,26 @@ Useful backtest flags:
 --backtest-max-origins N: stop after N scored origins
 --backtest-num-paths N: probabilistic paths requested from the model per origin
 --backtest-origin-source polygon|synth: choose arbitrary Polygon origins or official Synth prompt/score origins
+--backtest-fast-origins: for quick tests, use local feature timestamps even when Synth realized paths are enabled
 --backtest-realized-source polygon|synth: score against Polygon closes or Synth realized paths
 --backtest-maturity-lag-minutes N: avoid too-recent Synth origins whose realized paths/scores may not be published
 --backtest-checkpoint-every N: rewrite rolling_results.csv and summary.json every N scored origins
 --backtest-compare-miners N: fetch historical miner snapshots and rank against top N; use 0 to skip Synth score-history fetching
+```
+
+For short private-node checks with Synth realized paths but without the slow
+historical score-origin crawl:
+
+```bash
+synth-shadow backtest-rolling \
+  --asset BTC \
+  --debug \
+  --backtest-origin-source synth \
+  --backtest-realized-source synth \
+  --backtest-fast-origins \
+  --backtest-max-origins 3 \
+  --backtest-num-paths 16 \
+  --backtest-compare-miners 0
 ```
 
 ### Colored Debug Lines
