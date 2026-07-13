@@ -425,10 +425,7 @@ def _select_synth_score_origins(
     tolerance = _historical_score_tolerance(config, int(config["backtest"]["stride_minutes"]))
     start = first_origin + horizon - tolerance
     end = latest_matured_origin + horizon + tolerance
-    rows = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90))).historical_scores(
-        start=start,
-        end=end,
-    )
+    rows = _fetch_historical_score_rows(config, start, end, context="origin selection")
     earliest_feature = features["timestamp"].min()
     origins_by_time: dict[pd.Timestamp, pd.Timestamp] = {}
     for row in rows:
@@ -872,30 +869,7 @@ def _historical_miner_scores_for_origins(
     scored_times = [_score_match_time(origin, config) for origin in origins]
     start = min(scored_times) - tolerance
     end = max(scored_times) + tolerance
-    chunk_hours = float(config.get("backtest", {}).get("historical_score_chunk_hours", 24))
-    client = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90)))
-    rows: list[dict[str, Any]] = []
-    cursor = start
-    while cursor < end:
-        chunk_end = min(cursor + pd.Timedelta(hours=chunk_hours), end)
-        try:
-            chunk = client.historical_scores(start=cursor, end=chunk_end)
-            rows.extend(chunk)
-            LOG.debug(
-                "Fetched historical miner scores chunk start=%s end=%s rows=%s accumulated=%s",
-                cursor,
-                chunk_end,
-                len(chunk),
-                len(rows),
-            )
-        except Exception as exc:  # noqa: BLE001 - backtest can still run without miner comparison.
-            LOG.warning(
-                "Could not fetch historical miner scores chunk start=%s end=%s: %s",
-                cursor,
-                chunk_end,
-                exc,
-            )
-        cursor = chunk_end
+    rows = _fetch_historical_score_rows(config, start, end, context="miner comparison")
 
     grouped: dict[pd.Timestamp, list[dict[str, Any]]] = {}
     for row in rows:
@@ -912,6 +886,42 @@ def _historical_miner_scores_for_origins(
         max(grouped) if grouped else None,
     )
     return grouped
+
+
+def _fetch_historical_score_rows(
+    config: dict,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    *,
+    context: str,
+) -> list[dict[str, Any]]:
+    chunk_hours = float(config.get("backtest", {}).get("historical_score_chunk_hours", 24))
+    client = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90)))
+    rows: list[dict[str, Any]] = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(cursor + pd.Timedelta(hours=chunk_hours), end)
+        try:
+            chunk = client.historical_scores(start=cursor, end=chunk_end)
+            rows.extend(chunk)
+            LOG.debug(
+                "Fetched historical miner scores context=%s chunk_start=%s chunk_end=%s rows=%s accumulated=%s",
+                context,
+                cursor,
+                chunk_end,
+                len(chunk),
+                len(rows),
+            )
+        except Exception as exc:  # noqa: BLE001 - long backtests can tolerate missing score chunks.
+            LOG.warning(
+                "Could not fetch historical miner scores context=%s chunk_start=%s chunk_end=%s: %s",
+                context,
+                cursor,
+                chunk_end,
+                exc,
+            )
+        cursor = chunk_end
+    return rows
 
 
 def _score_time(row: dict[str, Any]) -> pd.Timestamp | None:

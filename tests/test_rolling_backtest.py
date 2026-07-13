@@ -647,6 +647,7 @@ def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatc
             "maturity_lag_minutes": 0,
             "stride_minutes": 5,
             "historical_score_tolerance_minutes": 30,
+            "historical_score_chunk_hours": 1,
         },
         "forecast": {"horizon_seconds": 600, "interval_seconds": 300},
         "synth": {"timeout_seconds": 90},
@@ -679,11 +680,50 @@ def test_synth_realized_origin_source_uses_historical_score_snapshots(monkeypatc
         realized_source="synth",
     )
 
-    assert len(score_windows) == 1
+    assert len(score_windows) > 1
+    assert all(end - start <= pd.Timedelta(hours=1) for start, end in score_windows)
     assert origins == [
         pd.Timestamp("2026-07-10T02:25:00Z"),
         pd.Timestamp("2026-07-10T03:10:00Z"),
     ]
+
+
+def test_historical_score_fetch_chunks_long_windows(monkeypatch):
+    calls = []
+    config = {
+        "asset": "BTC",
+        "backtest": {"historical_score_chunk_hours": 6},
+        "synth": {"timeout_seconds": 90},
+    }
+
+    class FakeSynthClient:
+        def __init__(self, client_config, timeout_seconds=30):
+            assert client_config is config
+            assert timeout_seconds == 90
+
+        def historical_scores(self, start=None, end=None):
+            calls.append((start, end))
+            return [{"scored_time": str(end), "miner_uid": len(calls), "crps": 1.0}]
+
+    monkeypatch.setattr(rolling, "SynthClient", FakeSynthClient)
+
+    rows = rolling._fetch_historical_score_rows(
+        config,
+        pd.Timestamp("2026-07-01T00:00:00Z"),
+        pd.Timestamp("2026-07-02T03:00:00Z"),
+        context="test",
+    )
+
+    assert len(calls) == 5
+    assert calls[0] == (
+        pd.Timestamp("2026-07-01T00:00:00Z"),
+        pd.Timestamp("2026-07-01T06:00:00Z"),
+    )
+    assert calls[-1] == (
+        pd.Timestamp("2026-07-02T00:00:00Z"),
+        pd.Timestamp("2026-07-02T03:00:00Z"),
+    )
+    assert len(rows) == 5
 
 
 def test_backtest_summary_includes_relevance_statistics():
