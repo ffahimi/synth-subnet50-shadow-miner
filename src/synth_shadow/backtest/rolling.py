@@ -365,6 +365,12 @@ def run_rolling_backtest(
                     origin,
                 )
                 continue
+            if realized_source == "synth" and status_code == 429:
+                LOG.warning(
+                    "Skipping origin=%s because Synth realized path API is rate limited.",
+                    origin,
+                )
+                continue
             raise
         except Exception as exc:  # noqa: BLE001 - keep rolling backtest moving.
             LOG.warning("Backtest origin failed origin=%s error=%s", origin, exc)

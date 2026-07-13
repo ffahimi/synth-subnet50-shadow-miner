@@ -645,7 +645,8 @@ def test_synth_realized_source_loads_realized_path(monkeypatch):
 
 def test_synth_backtest_skips_unavailable_realized_before_provider(monkeypatch, tmp_path):
     older_origin = pd.Timestamp("2026-07-10T03:00:00Z")
-    newer_origin = pd.Timestamp("2026-07-10T03:05:00Z")
+    rate_limited_origin = pd.Timestamp("2026-07-10T03:05:00Z")
+    newer_origin = pd.Timestamp("2026-07-10T03:10:00Z")
     interval_seconds = 300
     horizon_seconds = 600
     expected_points = 3
@@ -714,10 +715,14 @@ def test_synth_backtest_skips_unavailable_realized_before_provider(monkeypatch, 
             pass
 
         def realized_path(self, start_time):
-            if start_time == "2026-07-10T03:05:00Z":
+            if start_time == "2026-07-10T03:10:00Z":
                 response = requests.Response()
                 response.status_code = 404
                 raise requests.HTTPError("404 Client Error", response=response)
+            if start_time == "2026-07-10T03:05:00Z":
+                response = requests.Response()
+                response.status_code = 429
+                raise requests.HTTPError("429 Client Error", response=response)
             assert start_time == "2026-07-10T03:00:00Z"
             return {"real_prices": [104.0, 105.0, 106.0]}
 
@@ -732,7 +737,7 @@ def test_synth_backtest_skips_unavailable_realized_before_provider(monkeypatch, 
         _score_snapshot_cache,
     ):
         assert selection_max == 24
-        return [older_origin, newer_origin]
+        return [newer_origin, rate_limited_origin, older_origin]
 
     monkeypatch.setattr(rolling, "_load_backtest_bars", lambda _config, _days: bars)
     monkeypatch.setattr(rolling, "build_feature_frame", lambda _bars, _config: features)
