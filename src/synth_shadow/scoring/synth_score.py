@@ -45,3 +45,39 @@ def compare_to_miners(raw_crps: float, miner_scores: list[dict[str, Any]]) -> di
     }
     LOG.debug("Miner comparison: %s", comparison)
     return comparison
+
+
+def top_miner_crps_stats(miner_scores: list[dict[str, Any]], count: int = 10) -> dict[str, Any]:
+    """Summarize the top N finite miner CRPS values."""
+    valid = [
+        {
+            "miner_uid": row.get("miner_uid"),
+            "crps": float(row["crps"]),
+            "scored_time": row.get("scored_time"),
+        }
+        for row in miner_scores
+        if row.get("crps") is not None and np.isfinite(float(row["crps"]))
+    ]
+    top = sorted(valid, key=lambda row: row["crps"])[:count]
+    if not top:
+        return {
+            "count": 0,
+            "mean": None,
+            "median": None,
+            "std": None,
+            "min": None,
+            "max": None,
+            "uids": [],
+            "scored_time": None,
+        }
+    values = np.array([row["crps"] for row in top], dtype=float)
+    return {
+        "count": int(values.size),
+        "mean": float(np.mean(values)),
+        "median": float(np.median(values)),
+        "std": float(np.std(values, ddof=0)),
+        "min": float(np.min(values)),
+        "max": float(np.max(values)),
+        "uids": [row["miner_uid"] for row in top],
+        "scored_time": top[0].get("scored_time"),
+    }

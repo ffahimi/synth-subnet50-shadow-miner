@@ -25,9 +25,10 @@ from synth_shadow.models.protocol import ForecastContext
 from synth_shadow.models.session_path_model import build_session_library
 from synth_shadow.scoring.benchmarks import select_reference_miners
 from synth_shadow.scoring.crps import score_synth_btc_24h
+from synth_shadow.scoring.synth_score import top_miner_crps_stats
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
 from synth_shadow.synth.client import SynthClient
-from synth_shadow.utils.logging import GREEN, colored_debug
+from synth_shadow.utils.logging import GREEN, YELLOW, colored_debug
 from synth_shadow.utils.time import utc_now
 
 LOG = logging.getLogger(__name__)
@@ -93,6 +94,21 @@ def run_rolling_backtest(
     model = None if provider else load_forecast_model(run_config)
     model_version = "http_provider" if provider else str(getattr(model, "model_version", model.__class__.__name__))
     model_entrypoint = endpoint if provider else configured_model_entrypoint(run_config)
+    top10_stats = _latest_top_miner_crps_stats(run_config, count=10)
+    if top10_stats["count"]:
+        colored_debug(
+            LOG,
+            "[TOP10 MINERS] asset=%s count=%s mean=%.6f median=%.6f std=%.6f min=%.6f max=%.6f scored_time=%s",
+            run_config["asset"],
+            top10_stats["count"],
+            top10_stats["mean"],
+            top10_stats["median"],
+            top10_stats["std"],
+            top10_stats["min"],
+            top10_stats["max"],
+            top10_stats["scored_time"],
+            color=YELLOW,
+        )
 
     for idx, origin in enumerate(origins, start=1):
         past_bars = bars[bars["timestamp"] <= origin].copy()
@@ -153,6 +169,7 @@ def run_rolling_backtest(
                 (
                     "[BACKTEST CRPS] asset=%s origin=%s raw=%.6f "
                     "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
+                    "top10_mean=%s top10_median=%s top10_std=%s gap_mean=%s gap_median=%s "
                     "http_latency=%s node_latency=%s shape=%s"
                 ),
                 run_config["asset"],
@@ -163,6 +180,11 @@ def run_rolling_backtest(
                 row["crps_3h"],
                 row["crps_24h"],
                 row["crps_path_price"],
+                _format_float(top10_stats["mean"]),
+                _format_float(top10_stats["median"]),
+                _format_float(top10_stats["std"]),
+                _format_float(_gap(row["raw_crps"], top10_stats["mean"])),
+                _format_float(_gap(row["raw_crps"], top10_stats["median"])),
                 _format_seconds(output.diagnostics.get("http_latency_seconds"))
                 if provider
                 else "n/a",
@@ -181,6 +203,7 @@ def run_rolling_backtest(
         raise RuntimeError("Backtest produced no scored origins.")
 
     result = _summarize_backtest(rows, run_config, sanity_rows)
+    result["top10_miner_crps_stats"] = top10_stats
     result["model"] = {
         "model_version": model_version,
         "model_entrypoint": model_entrypoint,
@@ -313,6 +336,18 @@ def _format_seconds(value: Any) -> str:
     return f"{float(value):.3f}s"
 
 
+def _format_float(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.6f}"
+
+
+def _gap(ours: float, miner_stat: Any) -> float | None:
+    if miner_stat is None:
+        return None
+    return float(ours) - float(miner_stat)
+
+
 def _format_origin(origin: pd.Timestamp) -> str:
     return _utc_timestamp(origin).isoformat()
 
@@ -419,6 +454,14 @@ def _reference_miners(config: dict) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 - backtest should still be useful without Synth.
         LOG.warning("Could not fetch reference miners for backtest: %s", exc)
         return []
+
+
+def _latest_top_miner_crps_stats(config: dict, count: int = 10) -> dict[str, Any]:
+    try:
+        return top_miner_crps_stats(SynthClient(config).latest_scores(), count=count)
+    except Exception as exc:  # noqa: BLE001 - backtest should continue without comparison stats.
+        LOG.warning("Could not fetch top miner CRPS stats for backtest debug lines: %s", exc)
+        return top_miner_crps_stats([], count=count)
 
 
 def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:

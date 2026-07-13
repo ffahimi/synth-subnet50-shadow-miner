@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 
 from synth_shadow.scoring.crps import score_synth_btc_24h
-from synth_shadow.scoring.synth_score import compare_to_miners
+from synth_shadow.scoring.synth_score import compare_to_miners, top_miner_crps_stats
 from synth_shadow.storage.files import ensure_dir, safe_timestamp
 from synth_shadow.storage.registry import ForecastRegistry
 from synth_shadow.synth.client import SynthClient
@@ -39,6 +39,7 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
     score = score_synth_btc_24h(paths, realized)
     latest_scores = client.latest_scores()
     comparison = compare_to_miners(score["raw_crps"], latest_scores)
+    top10_stats = top_miner_crps_stats(latest_scores, count=10)
     realized_file = _save_realized_path(config, realized_payload)
 
     ForecastRegistry(config["storage"]["registry_path"]).register_score(
@@ -60,6 +61,7 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
         (
             "[LIVE CRPS] asset=%s prompt_start=%s raw=%.6f "
             "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
+            "top10_mean=%s top10_median=%s top10_std=%s gap_mean=%s gap_median=%s "
             "http_latency=%s node_latency=%s forecast_dir=%s"
         ),
         metadata.get("asset", config["asset"]),
@@ -70,6 +72,11 @@ def score_forecast_dir(config: dict, forecast_dir: str) -> dict[str, Any]:
         float(score["components"]["crps_3h"]),
         float(score["components"]["crps_24h"]),
         float(score["components"]["crps_path_price"]),
+        _format_float(top10_stats["mean"]),
+        _format_float(top10_stats["median"]),
+        _format_float(top10_stats["std"]),
+        _format_float(_gap(float(score["raw_crps"]), top10_stats["mean"])),
+        _format_float(_gap(float(score["raw_crps"]), top10_stats["median"])),
         _format_seconds(diagnostics.get("http_latency_seconds")),
         _format_seconds(_node_total_latency(diagnostics)),
         target,
@@ -141,3 +148,15 @@ def _format_seconds(value: Any) -> str:
     if value is None:
         return "n/a"
     return f"{float(value):.3f}s"
+
+
+def _format_float(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.6f}"
+
+
+def _gap(ours: float, miner_stat: Any) -> float | None:
+    if miner_stat is None:
+        return None
+    return float(ours) - float(miner_stat)
