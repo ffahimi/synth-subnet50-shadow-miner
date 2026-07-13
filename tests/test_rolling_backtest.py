@@ -29,6 +29,8 @@ def test_recent_polygon_rolling_backtest_is_causal_and_shape_correct(
 ):
     """Live recent-data audit for rolling backtest causality and path dimensions."""
     config = apply_asset(load_config("config/default.yaml"), "ETH")
+    monkeypatch.delenv("SYNTH_MODEL_ENDPOINT", raising=False)
+    config["model"]["endpoint"] = None
     if not os.getenv("POLYGON_API_KEY"):
         pytest.skip("POLYGON_API_KEY is required for the recent Polygon backtest audit.")
 
