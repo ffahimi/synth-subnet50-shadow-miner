@@ -740,7 +740,7 @@ cutoff: model data cutoff returned by the private node
 The green CRPS line is emitted after every origin is scored:
 
 ```text
-[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... historical_rank=12/244 historical_miners_beaten=232 historical_percentile_beaten=95.08% matched_scored_time=... score_time_delta_min=0.00 historical_top10_mean=... historical_top10_median=... historical_top10_std=... gap_vs_historical_mean=... gap_vs_historical_median=... http_latency=... node_latency=... shape=(250, 289)
+[BACKTEST CRPS] asset=BTC origin=... raw=... 5m=... 30m=... 3h=... 24h=... path=... historical_rank=12/244 historical_miners_beaten=232 historical_percentile_beaten=95.08% target_scored_time=... matched_scored_time=... score_time_delta_min=0.00 historical_top10_mean=... historical_top10_median=... historical_top10_std=... gap_vs_historical_mean=... gap_vs_historical_median=... http_latency=... node_latency=... shape=(250, 289)
 ```
 
 Fields:
@@ -752,8 +752,9 @@ historical_top10_mean / historical_top10_median / historical_top10_std: top-10 v
 historical_rank: our estimated rank among valid miners in the matched historical score snapshot
 historical_miners_beaten: count of valid matched-time miners with worse CRPS than ours
 historical_percentile_beaten: percentage of valid matched-time miners with worse CRPS than ours
+target_scored_time: expected miner score time, computed as origin + 24h horizon
 matched_scored_time: historical Synth score snapshot used for comparison
-score_time_delta_min: absolute minutes between the backtest origin and matched_scored_time
+score_time_delta_min: absolute minutes between target_scored_time and matched_scored_time
 gap_vs_historical_mean: our raw CRPS minus matched historical top-10 mean CRPS
 gap_vs_historical_median: our raw CRPS minus matched historical top-10 median CRPS
 http_latency: public harness HTTP round-trip time for this forecast
@@ -764,14 +765,18 @@ shape: returned forecast matrix shape, expected (num_paths, 289)
 The yellow top-miner summary shows the first matched historical score snapshot:
 
 ```text
-[HISTORICAL TOP10 MINERS] asset=BTC first_origin=... matched_scored_time=... delta_minutes=0.00 count=10 mean=... median=... std=... min=... max=...
+[HISTORICAL TOP10 MINERS] asset=BTC first_origin=... matched_scored_time=... target_scored_time=... delta_minutes=0.00 count=10 mean=... median=... std=... min=... max=...
 ```
 
 Backtest miner comparison uses `/validation/scores/historical` over the
-backtest origin window, then matches each origin to the nearest historical
-`scored_time` within the origin stride tolerance. Invalid sentinel CRPS values
-such as `-1` are filtered out. If no historical snapshot is close enough, the
-comparison fields print `n/a` instead of falling back to latest scores.
+expected score window. For each origin, the expected score time is
+`origin + forecast.horizon_seconds`, so a 24h forecast starting at
+`2026-07-12T17:00Z` is matched against miner scores near
+`2026-07-13T17:00Z`. The default match tolerance is
+`backtest.historical_score_tolerance_minutes`, currently 30 minutes. Invalid
+sentinel CRPS values such as `-1` are filtered out. If no historical snapshot is
+close enough, the comparison fields print `n/a` instead of falling back to
+latest scores.
 
 Smoke-test the debug lines with the private inference node:
 

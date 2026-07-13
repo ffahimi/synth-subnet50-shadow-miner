@@ -49,6 +49,7 @@ backtest:
   max_origins:
   num_paths: 250
   compare_miners: 4
+  historical_score_tolerance_minutes: 30
 
 history:
   lookback_days: 14

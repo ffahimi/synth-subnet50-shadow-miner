@@ -98,7 +98,8 @@ def run_rolling_backtest(
         first_snapshot = _nearest_historical_miner_scores(
             origins[0],
             historical_scores,
-            tolerance=pd.Timedelta(minutes=max(stride_minutes, 5)),
+            tolerance=_historical_score_tolerance(run_config, stride_minutes),
+            config=run_config,
         )
         first_top10 = top_miner_crps_stats(first_snapshot["scores"], count=10) if first_snapshot else None
     else:
@@ -109,11 +110,12 @@ def run_rolling_backtest(
             LOG,
             (
                 "[HISTORICAL TOP10 MINERS] asset=%s first_origin=%s matched_scored_time=%s "
-                "delta_minutes=%.2f count=%s mean=%.6f median=%.6f std=%.6f min=%.6f max=%.6f"
+                "target_scored_time=%s delta_minutes=%.2f count=%s mean=%.6f median=%.6f std=%.6f min=%.6f max=%.6f"
             ),
             run_config["asset"],
             origins[0],
             first_snapshot["scored_time"],
+            first_snapshot["target_scored_time"],
             first_snapshot["delta_minutes"],
             first_top10["count"],
             first_top10["mean"],
@@ -180,7 +182,8 @@ def run_rolling_backtest(
             historical_snapshot = _nearest_historical_miner_scores(
                 origin,
                 historical_scores,
-                tolerance=pd.Timedelta(minutes=max(stride_minutes, 5)),
+                tolerance=_historical_score_tolerance(run_config, stride_minutes),
+                config=run_config,
             )
             miner_scores_at_origin = historical_snapshot["scores"] if historical_snapshot else []
             top10_stats = top_miner_crps_stats(miner_scores_at_origin, count=10)
@@ -191,6 +194,9 @@ def run_rolling_backtest(
                     "historical_miner_count": historical_rank["miner_count"],
                     "historical_miners_beaten": historical_rank["miners_beaten"],
                     "historical_percentile_beaten": historical_rank["percentile_beaten"],
+                    "target_scored_time": historical_snapshot["target_scored_time"]
+                    if historical_snapshot
+                    else str(_score_match_time(origin, run_config)),
                     "matched_scored_time": historical_snapshot["scored_time"] if historical_snapshot else None,
                     "score_time_delta_min": historical_snapshot["delta_minutes"] if historical_snapshot else None,
                     "historical_top10_mean": top10_stats["mean"],
@@ -207,7 +213,7 @@ def run_rolling_backtest(
                     "[BACKTEST CRPS] asset=%s origin=%s raw=%.6f "
                     "5m=%.6f 30m=%.6f 3h=%.6f 24h=%.6f path=%.6f "
                     "historical_rank=%s/%s historical_miners_beaten=%s "
-                    "historical_percentile_beaten=%s matched_scored_time=%s score_time_delta_min=%s "
+                    "historical_percentile_beaten=%s target_scored_time=%s matched_scored_time=%s score_time_delta_min=%s "
                     "historical_top10_mean=%s historical_top10_median=%s historical_top10_std=%s "
                     "gap_vs_historical_mean=%s gap_vs_historical_median=%s "
                     "http_latency=%s node_latency=%s shape=%s"
@@ -224,6 +230,7 @@ def run_rolling_backtest(
                 historical_rank["miner_count"],
                 _format_rank(historical_rank["miners_beaten"]),
                 _format_percent(historical_rank["percentile_beaten"]),
+                historical_snapshot["target_scored_time"] if historical_snapshot else str(_score_match_time(origin, run_config)),
                 historical_snapshot["scored_time"] if historical_snapshot else "n/a",
                 _format_float(historical_snapshot["delta_minutes"] if historical_snapshot else None),
                 _format_float(top10_stats["mean"]),
@@ -486,9 +493,9 @@ def _historical_miner_scores_for_origins(
 ) -> dict[pd.Timestamp, list[dict[str, Any]]]:
     if not origins:
         return {}
-    tolerance = pd.Timedelta(minutes=max(stride_minutes, 5))
-    start = _utc_timestamp(origins[0]) - tolerance
-    end = _utc_timestamp(origins[-1]) + tolerance
+    tolerance = _historical_score_tolerance(config, stride_minutes)
+    start = _score_match_time(origins[0], config) - tolerance
+    end = _score_match_time(origins[-1], config) + tolerance
     chunk_hours = float(config.get("backtest", {}).get("historical_score_chunk_hours", 24))
     client = SynthClient(config, timeout_seconds=int(config.get("synth", {}).get("timeout_seconds", 90)))
     rows: list[dict[str, Any]] = []
@@ -536,19 +543,32 @@ def _nearest_historical_miner_scores(
     origin: pd.Timestamp,
     snapshots: dict[pd.Timestamp, list[dict[str, Any]]],
     tolerance: pd.Timedelta,
+    config: dict | None = None,
 ) -> dict[str, Any] | None:
     if not snapshots:
         return None
-    origin_ts = _utc_timestamp(origin)
-    nearest = min(snapshots, key=lambda ts: abs(ts - origin_ts))
-    delta = abs(nearest - origin_ts)
+    target = _score_match_time(origin, config) if config else _utc_timestamp(origin)
+    nearest = min(snapshots, key=lambda ts: abs(ts - target))
+    delta = abs(nearest - target)
     if delta > tolerance:
         return None
     return {
+        "target_scored_time": str(target),
         "scored_time": str(nearest),
         "delta_minutes": float(delta.total_seconds() / 60),
         "scores": snapshots[nearest],
     }
+
+
+def _score_match_time(origin: pd.Timestamp, config: dict | None = None) -> pd.Timestamp:
+    horizon_seconds = int((config or {}).get("forecast", {}).get("horizon_seconds", 86400))
+    return _utc_timestamp(origin) + pd.Timedelta(seconds=horizon_seconds)
+
+
+def _historical_score_tolerance(config: dict, stride_minutes: int) -> pd.Timedelta:
+    configured = config.get("backtest", {}).get("historical_score_tolerance_minutes")
+    minutes = float(configured) if configured not in (None, "") else max(float(stride_minutes), 30.0)
+    return pd.Timedelta(minutes=minutes)
 
 
 def _save_backtest(rows: list[dict[str, Any]], result: dict[str, Any], config: dict) -> Path:
