@@ -1,10 +1,10 @@
 # Synth Subnet 50 Shadow Miner
 
 Shadow forecasting and scoring prototype for Synth subnet 50. The current
-version is Polygon-first and supports `BTC`, `ETH`, and `XAU`: it builds
-24-hour probabilistic paths at 5-minute resolution, stores the forecast
-artifacts, syncs public Synth validation context, and can run a rolling
-historical backtest.
+public repo is the shadow-miner harness: it calls a model provider, validates
+24-hour probabilistic paths at 5-minute resolution, stores forecast artifacts,
+syncs public Synth validation context, and can run rolling historical
+backtests.
 
 Live Bittensor miner integration is intentionally not part of this first layer.
 The goal is to test whether the forecast distribution is competitive before
@@ -13,20 +13,17 @@ wrapping it in a live miner.
 ## What Works Now
 
 ```text
-Polygon 5-minute REST data fetch for BTC, ETH, XAU
-canonical OHLCV repair/checks
-liquidity session labels
-1h/4h volatility, vol-of-vol, vol slope, momentum, kurtosis
-historical normalized session-path library
-public forecast model interface with private model entrypoint support
-1000 x 289 BTC 24h path generation
+HTTP inference-node forecast contract
+private model endpoint support through SYNTH_MODEL_ENDPOINT
+forecast path/timestamp validation
+1000 x 289 24h path artifact handling
 forecast inspection and percentile summaries
 Synth prompt sync
 Synth latest score + leaderboard fetch
 CRPS in basis points, matching Synth's cross-asset score units
 CRPS/reward benchmark join by miner UID
 SQLite local forecast registry
-rolling historical Polygon backtest
+rolling historical backtest with Synth or legacy local realized sources
 ```
 
 ## Current Public Harness Architecture
@@ -52,12 +49,12 @@ print live sanity/latency diagnostics
 Forecast provider modes:
 
 ```text
-local provider:
-  public repo fetches Polygon 5m bars, builds public features, runs baseline model
-
 HTTP provider:
   public repo calls SYNTH_MODEL_ENDPOINT once per forecast cycle
-  private service owns data access, 1m BTC data, vectorization, matching, and forecasting
+  private service owns data access, history, vectorization, matching, and forecasting
+
+local baseline provider:
+  legacy development path inside this repo for smoke tests and public examples
 ```
 
 The live loop should normally sleep `300` seconds between cycles. With
@@ -67,9 +64,9 @@ The live loop should normally sleep `300` seconds between cycles. With
 Supported assets:
 
 ```text
-BTC -> Polygon X:BTCUSD -> Synth BTC -> crypto-24h
-ETH -> Polygon X:ETHUSD -> Synth ETH -> crypto-24h
-XAU -> Polygon C:XAUUSD -> Synth XAU -> com-equ-24h
+BTC -> Synth BTC -> crypto-24h
+ETH -> Synth ETH -> crypto-24h
+XAU -> Synth XAU -> com-equ-24h
 ```
 
 The main forecast target per asset is:
@@ -85,15 +82,15 @@ path length: 289 prices
 
 ```text
 src/synth_shadow/
-  data/            Polygon adapter and canonical bar schema
-  features/        returns, volatility, momentum, kurtosis, feature pipeline
+  data/            legacy local data adapters used by public baseline/dev tooling
+  features/        legacy public feature pipeline for local baseline/dev tooling
   sessions/        EU, EU-US, US, outside-hours, weekend classifiers
   models/          model interface, loader, public baseline, state/sampler tools
   paths/           path generation and validation
   inspection/      forecast summaries and sample path reports
   synth/           public Synth API client
   scoring/         CRPS, Synth-style comparisons, benchmark joins
-  backtest/        rolling historical Polygon-realized backtest
+  backtest/        rolling historical backtest and miner-ranking comparison
   orchestration/   full shadow-cycle runner
   storage/         forecast files and SQLite registry
   utils/           time and logging helpers
@@ -119,29 +116,16 @@ Create `.env`:
 
 ```bash
 cat > .env <<'EOF'
-POLYGON_API_KEY=your_polygon_key_here
 SYNTH_SHADOW_CONFIG=config/default.yaml
 LOG_LEVEL=DEBUG
-# Optional: override public baseline with an installed private model package.
-# SYNTH_MODEL_ENTRYPOINT=private_synth_models.eth_v1:Model
+# Normal production/dev mode: call a private inference node.
+SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
 EOF
 ```
 
-Do not commit `.env` or a real Polygon key. The repo ignores `.env`, and the
-CLI treats placeholder values such as `your_polygon_key_here` as missing. If
-`POLYGON_API_KEY` is not loaded and the command is running in an interactive
-terminal, it prompts:
-
-```text
-Enter POLYGON_API_KEY:
-```
-
-For long-running `screen` jobs, export the key or create `.env` before starting
-the loop:
-
-```bash
-export POLYGON_API_KEY='your_real_polygon_key'
-```
+Do not commit `.env` or any API keys. In the normal HTTP-provider setup,
+market-data or database credentials live in the private inference-node repo/env,
+not in this public harness.
 
 For development tools:
 
@@ -161,16 +145,16 @@ All commands default to `BTC`. Use `--asset` to run another supported asset:
 
 ## Generate A New Forecast
 
-Run a standalone Polygon forecast:
-
-```bash
-synth-shadow generate-btc --debug
-```
-
-Equivalent generic command:
+Run a standalone forecast through the configured provider:
 
 ```bash
 synth-shadow generate-forecast --asset BTC --debug
+```
+
+BTC shorthand:
+
+```bash
+synth-shadow generate-btc --debug
 ```
 
 ETH:
@@ -185,9 +169,11 @@ XAU:
 synth-shadow generate-forecast --asset XAU --debug
 ```
 
-This fetches recent Polygon bars for the selected asset, extracts features, builds the session
-library, generates `1000 x 289` paths, saves files under `data/forecasts/<ASSET>/`,
-and registers the run in `data/registry.sqlite3`.
+With `SYNTH_MODEL_ENDPOINT` set, this calls the private inference node,
+validates the returned `1000 x 289` paths, saves files under
+`data/forecasts/<ASSET>/`, and registers the run in `data/registry.sqlite3`.
+Without an HTTP endpoint, it falls back to the public local baseline for legacy
+smoke tests.
 
 Run one live forecast with detailed sanity diagnostics:
 
@@ -204,11 +190,9 @@ For a faster latency probe with fewer paths:
 The sanity output prints:
 
 ```text
-stage latency in seconds: Polygon fetch, repair, features, library, generation, save, registry
-raw/repaired/feature row counts
-raw and feature date ranges
-5-minute resolution checks
-causality checks that features and bars stop at the prediction timestamp
+provider latency and private-node diagnostics, when returned
+path timestamp spacing and 5-minute resolution checks
+HTTP backtest checks that returned timestamps start at origin and data_cutoff <= origin
 path shape, timestamp count, timestamp spacing, finite/positive checks
 current price alignment and final-path percentiles
 ```
@@ -220,12 +204,12 @@ prompt start time is supplied by the orchestration layer.
 
 ## Public Repo / Private Model Split
 
-This repository is designed to be safe as a public harness. Keep data adapters,
-feature extraction, scoring, backtests, storage, and orchestration here. Keep
-forecast edge, experiments, and model-specific parameters in a separate private
-repo.
+This repository is designed to be safe as a public harness. Keep Synth-facing
+workflow, forecast validation, scoring, storage, and orchestration here. Keep
+market-data access, database connections, feature/vector creation, experiments,
+and model-specific parameters in a separate private inference repo.
 
-The public baseline model is configured in `config/default.yaml`:
+The legacy public baseline model is configured in `config/default.yaml`:
 
 ```yaml
 model:
@@ -234,7 +218,7 @@ model:
   timeout_seconds: 120
 ```
 
-There are two private model modes.
+There are two model modes. The HTTP inference node is the preferred mode.
 
 ### Private HTTP Inference Node
 
@@ -245,9 +229,9 @@ requests a forecast, validates/saves it, scores matured forecasts, and handles
 loop resiliency.
 
 This repo includes a simple wrapper example in `example-inference-node/`. It is
-safe to keep public because it is only a scaffold: it uses Polygon 1-minute REST
-data and a placeholder similarity/bootstrap generator. Copy that folder into a
-separate private repo before adding real model logic.
+safe to keep public because it is only a scaffold. Copy that folder into a
+separate private repo before adding real data adapters, database connections,
+features, or model logic.
 
 To try the example locally:
 
@@ -256,9 +240,11 @@ cd example-inference-node
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-export POLYGON_API_KEY=your_polygon_key_here
 uvicorn private_synth_models.server:app --host 127.0.0.1 --port 8088
 ```
+
+Configure any data credentials required by the inference node inside that
+private node environment, not in the public harness.
 
 Then in the public shadow miner:
 
@@ -320,7 +306,7 @@ Request field meanings:
 
 ```text
 asset: Synth asset symbol, for example BTC
-polygon_ticker: public ticker mapping, for example X:BTCUSD
+polygon_ticker: optional provider routing hint from config, for example X:BTCUSD; the private node may ignore or remap it
 prompt_start_time: latest synced Synth prompt start for live forecasts, or the backtest origin
 origin: historical forecast origin for backtests, nullable for live forecasts
 horizon_seconds: forecast horizon; currently 86400
@@ -422,7 +408,6 @@ cd synth-subnet50-models-private
 
 cd ../synth-subnet50-shadow-miner
 export SYNTH_MODEL_ENTRYPOINT=private_synth_models.eth_v1:Model
-export POLYGON_API_KEY=your_polygon_key_here
 export SYNTH_SHADOW_CONFIG=config/default.yaml
 export LOG_LEVEL=DEBUG
 ```
@@ -679,20 +664,21 @@ Default behavior:
 backtest window: last 1 matured day
 origin stride: every 5 minutes
 forecast horizon: 24h
-realized source: Polygon close path
-origin source: Polygon 5-minute bars
+realized source: legacy local realized path unless --backtest-realized-source synth is set
+origin source: legacy local feature timestamps unless --backtest-origin-source synth is set
 Synth maturity lag: 60 minutes
 paths per origin: config default, currently 250 for backtest
 miner comparison: enabled by config default, currently top 4; set --backtest-compare-miners 0 to skip Synth score history
 ```
 
-The backtest is causal: for each forecast origin, it uses only Polygon bars at
-or before that origin to build features and the session-path library. It then
-generates a 24h forecast and scores it against the next 24h of realized Polygon
-closes.
+With `SYNTH_MODEL_ENDPOINT` set, the backtest is causal from the public harness
+side: for each origin, it sends the origin to the private inference node, then
+checks that the returned forecast begins at that origin and that
+`data_cutoff <= origin`. The private node owns market-data access,
+vectorization, and path generation.
 
 For fair comparison against Synth miner CRPS, score against Synth's realized
-path instead of Polygon closes and use official Synth prompt origins:
+path and use official Synth prompt origins:
 
 ```bash
 synth-shadow backtest-rolling \
@@ -706,12 +692,11 @@ synth-shadow backtest-rolling \
   --backtest-compare-miners 10
 ```
 
-`polygon` remains the default origin and realized source because it is faster
-and useful for market-data sanity checks. Use
-`--backtest-origin-source synth --backtest-realized-source synth` when reading
-`historical_rank` against miner scores. Synth realized paths are only available
-for official Synth prompt starts; if you request Synth realized paths for
-arbitrary Polygon origins, the API can return `404 Not Found`.
+The legacy local origin/realized modes remain available for public smoke tests,
+but use `--backtest-origin-source synth --backtest-realized-source synth` when
+reading `historical_rank` against miner scores. Synth realized paths are only
+available for official Synth prompt starts; if you request Synth realized paths
+for arbitrary local origins, the API can return `404 Not Found`.
 The default `backtest.maturity_lag_minutes` is 60 because Synth realized paths
 and score snapshots can publish after the 24h horizon has ended. Increase it if
 recent prompt origins still return `404`.
@@ -773,17 +758,17 @@ Useful backtest flags:
 --backtest-stride-minutes N: origin spacing; 240 means one forecast every 4 hours
 --backtest-max-origins N: stop after N scored origins
 --backtest-num-paths N: probabilistic paths requested from the model per origin
---backtest-origin-source polygon|synth: choose arbitrary Polygon origins or official Synth prompt/score origins
+--backtest-origin-source polygon|synth: choose legacy local origins or official Synth prompt/score origins
 --backtest-fast-origins: for quick tests, use local feature timestamps even when Synth realized paths are enabled
---backtest-realized-source polygon|synth: score against Polygon closes or Synth realized paths
+--backtest-realized-source polygon|synth: score against legacy local realized paths or Synth realized paths
 --backtest-maturity-lag-minutes N: avoid too-recent Synth origins whose realized paths/scores may not be published
 --backtest-checkpoint-every N: rewrite rolling_results.csv and summary.json every N scored origins
 --backtest-compare-miners N: fetch historical miner snapshots and rank against top N; use 0 to skip Synth score-history fetching
 --backtest-historical-scores-file PATH: use a local historical miner scores CSV instead of Synth score-history API
 ```
 
-For a short run with no Synth API calls at all, use Polygon origins and Polygon
-realized paths:
+For a short local-harness smoke test with no Synth realized-path calls, use the
+legacy local origin and realized modes:
 
 ```bash
 synth-shadow backtest-rolling \
@@ -820,8 +805,9 @@ history again:
 synth-shadow backtest-rolling \
   --asset BTC \
   --debug \
-  --backtest-origin-source polygon \
-  --backtest-realized-source polygon \
+  --backtest-origin-source synth \
+  --backtest-realized-source synth \
+  --backtest-fast-origins \
   --backtest-stride-minutes 60 \
   --backtest-max-origins 3 \
   --backtest-num-paths 16 \
@@ -942,6 +928,10 @@ export SYNTH_MODEL_ENDPOINT=http://127.0.0.1:8088/predict
 .venv/bin/python -m synth_shadow.cli backtest-rolling \
   --asset BTC \
   --debug \
+  --backtest-origin-source synth \
+  --backtest-realized-source synth \
+  --backtest-fast-origins \
+  --backtest-maturity-lag-minutes 60 \
   --backtest-days 193 \
   --backtest-stride-minutes 240 \
   --backtest-num-paths 64 \
@@ -1032,7 +1022,6 @@ docs/top_miners_regime_research.md
 Run the default 90-day BTC/ETH study:
 
 ```bash
-export POLYGON_API_KEY=your_polygon_key_here
 .venv/bin/python scripts/top_miners_regime_research.py \
   --days 90 \
   --assets BTC ETH \
@@ -1053,17 +1042,18 @@ Run a longer study:
 ```
 
 Outputs are written under `data/reports/...`, which is ignored by Git. The
-script writes daily miner CRPS, top-N persistence, Polygon-derived daily/session
-regimes, and performance tables by regime.
+script writes daily miner CRPS, top-N persistence, market-regime summaries, and
+performance tables by regime. If you extend the research script with private
+market data, keep those data credentials outside this public repo.
 
 ## Output Files
 
 ```text
 data/raw/
-  raw Polygon 5-minute bars
+  legacy local baseline/dev data, when used
 
 data/processed/
-  repaired bars with sessions and features
+  legacy local baseline/dev features, when used
 
 data/forecasts/BTC/<timestamp>/
   paths.npz
@@ -1105,11 +1095,11 @@ config/default.yaml
 Important sections:
 
 ```text
-assets         Polygon ticker, Synth asset, competition mapping
+assets         Synth asset, competition mapping, and optional legacy ticker metadata
 forecast       horizon, interval, number of paths
-history        Polygon lookback and bar size
-features       1h/4h rolling windows
-sessions       BTC liquidity session definitions
+history        legacy local baseline lookback/bar settings
+features       legacy local baseline rolling-window settings
+sessions       legacy local baseline session definitions
 sampling       session block size
 normalization  volatility/momentum/kurtosis scaling limits
 synth          public Synth API settings
@@ -1120,9 +1110,10 @@ inspection     checkpoint and sample-path settings
 
 ## Notes
 
-- Polygon API keys belong in `.env`, not Git.
-- The current model is a baseline session-resampled volatility projection.
-- XAU uses Polygon `C:XAUUSD`; unlike crypto, it has market closures/gaps.
+- Public harness `.env` should contain harness settings such as
+  `SYNTH_MODEL_ENDPOINT`, not private market-data credentials.
+- The bundled local model is only a baseline/session-resampled development
+  fallback. Production model logic should live behind the private HTTP node.
 - Synth scoring here is a shadow approximation using documented CRPS scales.
 - Single-asset testing does not estimate full competition emissions by itself.
 - A fresh forecast must wait for the 24h realized path before official-like
