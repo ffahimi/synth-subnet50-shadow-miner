@@ -262,12 +262,65 @@ If only Synth score consistency is needed and Polygon features can be skipped:
   --skip-polygon
 ```
 
+Probe Synth equity/commodity prompt coverage. As of the latest local probe,
+`XAU` returned active prompts while common equity tickers such as `SPY`, `QQQ`,
+`AAPL`, `MSFT`, `NVDA`, and `TSLA` returned no prompts for the sampled day:
+
+```bash
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --discover-synth-equities \
+  --discover-only \
+  --equities \
+  --skip-polygon \
+  --output-dir data/reports/synth_equity_coverage
+```
+
+Smoke-test Polygon 1-minute data for the active equity/commodity asset before a
+long analysis. The smoke output includes row count, first/last timestamp,
+minimum/median spacing, one-minute gap rate, and any error. The longer lookback
+helps avoid false negatives around equity market closures:
+
+```bash
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --equities \
+  --assets XAU \
+  --days 1 \
+  --polygon-minute-smoke \
+  --polygon-smoke-lookback-hours 72 \
+  --polygon-smoke-only \
+  --output-dir data/reports/xau_minute_smoke
+```
+
+Configured assets such as `XAU` use `config/default.yaml`. Research-only equity
+symbols discovered by the probe can also be passed directly through `--assets`;
+the script dynamically maps them to Synth `com-equ-24h` and uses the same symbol
+as the Polygon ticker unless an override is defined.
+
+Run a full XAU miner-performance study with score-level market-state features:
+
+```bash
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --equities \
+  --assets XAU \
+  --days 180 \
+  --top-n 25 \
+  --output-dir data/reports/top_miners_xau_research_180d \
+  --synth-timeout-seconds 120 \
+  --max-retries 6 \
+  --retry-sleep-seconds 10
+```
+
 Generated outputs include:
 
 ```text
 *_historical_scores.csv
 *_daily_miner_crps.csv
 *_miner_consistency.csv
+*_market_state_features_1m.csv
+*_score_feature_rows.csv
+*_feature_bucket_performance.csv
+*_miner_feature_consistency.csv
+*_score_feature_correlations.csv
 *_full_features_5m.csv
 *_daily_regimes.csv
 *_session_regimes.csv
@@ -279,6 +332,16 @@ Generated outputs include:
 *_session_composite_performance.csv
 *_feature_correlations.csv
 summary.json
+```
+
+The score-level feature rows match each Synth score to the market state at
+`scored_time - 24h`, i.e. the forecast origin time. Features are calculated from
+Polygon 1-minute bars:
+
+```text
+momentum_1h,  momentum_3h,  momentum_5h,  momentum_8h,  momentum_24h
+realized_vol_1h, realized_vol_3h, realized_vol_5h, realized_vol_8h, realized_vol_24h
+vol_of_vol_1h, vol_of_vol_3h, vol_of_vol_5h, vol_of_vol_8h, vol_of_vol_24h
 ```
 
 Outputs are written under `data/reports/...`, which is ignored by git.

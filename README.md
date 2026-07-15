@@ -1041,6 +1041,46 @@ Run a longer study:
   --retry-sleep-seconds 10
 ```
 
+Probe Synth equity/commodity coverage:
+
+```bash
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --discover-synth-equities \
+  --discover-only \
+  --equities \
+  --skip-polygon \
+  --output-dir data/reports/synth_equity_coverage
+```
+
+Smoke-test 1-minute market data for the active Synth equity/commodity asset:
+
+```bash
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --equities \
+  --assets XAU \
+  --days 1 \
+  --polygon-minute-smoke \
+  --polygon-smoke-lookback-hours 72 \
+  --polygon-smoke-only \
+  --output-dir data/reports/xau_minute_smoke
+```
+
+Run the full XAU equity/commodity miner-performance study:
+
+```bash
+.venv/bin/python scripts/top_miners_regime_research.py \
+  --equities \
+  --assets XAU \
+  --days 180 \
+  --top-n 25 \
+  --polygon-minute-smoke \
+  --polygon-smoke-lookback-hours 72 \
+  --output-dir data/reports/top_miners_xau_research_180d \
+  --synth-timeout-seconds 120 \
+  --max-retries 6 \
+  --retry-sleep-seconds 10
+```
+
 Outputs are written under `data/reports/...`, which is ignored by Git. The
 script writes daily miner CRPS, top-N persistence, market-regime summaries, and
 performance tables by regime. If you extend the research script with private

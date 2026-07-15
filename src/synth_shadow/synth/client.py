@@ -37,7 +37,7 @@ class SynthClient:
                 "time_length": synth_cfg["time_length"],
             },
         )
-        start_times = payload.get("start_times", [])
+        start_times = payload.get("start_times") or []
         LOG.debug("Synth prompts fetched count=%s", len(start_times))
         return sorted(str(value) for value in start_times)
 
