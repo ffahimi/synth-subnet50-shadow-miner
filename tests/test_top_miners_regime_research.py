@@ -45,7 +45,7 @@ def test_market_state_features_include_requested_windows():
     assert features["realized_vol_24h"].notna().any()
 
 
-def test_dynamic_equity_config_infers_synth_and_polygon_settings():
+def test_dynamic_equity_config_maps_synth_equity_symbol_to_polygon_ticker():
     base_config = {
         "asset": "BTC",
         "polygon_ticker": "X:BTCUSD",
@@ -53,13 +53,13 @@ def test_dynamic_equity_config_infers_synth_and_polygon_settings():
         "synth": {"asset": "BTC", "competition": "crypto-24h"},
     }
 
-    config = research.dynamic_equity_config(base_config, "SPY")
+    config = research.dynamic_equity_config(base_config, "NVDAX")
 
-    assert config["asset"] == "SPY"
-    assert config["polygon_ticker"] == "SPY"
-    assert config["synth"]["asset"] == "SPY"
+    assert config["asset"] == "NVDAX"
+    assert config["polygon_ticker"] == "NVDA"
+    assert config["synth"]["asset"] == "NVDAX"
     assert config["synth"]["competition"] == "com-equ-24h"
-    assert config["assets"]["SPY"]["competition"] == "com-equ-24h"
+    assert config["assets"]["NVDAX"]["competition"] == "com-equ-24h"
 
 
 def test_dynamic_equity_config_uses_xau_polygon_override():
@@ -91,7 +91,31 @@ def test_dynamic_equity_config_uses_xag_polygon_override():
 def test_default_synth_equity_candidates_cover_common_equities_and_etfs():
     candidates = set(research.DEFAULT_SYNTH_EQUITY_CANDIDATES)
 
-    assert {"XAU", "GLD", "SPY", "QQQ", "AAPL", "NVDA", "XLF", "XLK"}.issubset(candidates)
+    assert {"XAU", "SPYX", "NVDAX", "GOOGLX", "TSLAX", "AAPLX", "WTIOIL", "SPCX"}.issubset(candidates)
+    assert "AAPL" not in candidates
+    assert "NVDA" not in candidates
+
+
+def test_default_equity_assets_use_synth_validation_symbols():
+    assert research.DEFAULT_EQUITY_ASSETS == (
+        "XAU",
+        "SPYX",
+        "NVDAX",
+        "GOOGLX",
+        "TSLAX",
+        "AAPLX",
+        "WTIOIL",
+        "SPCX",
+    )
+
+
+def test_synth_equity_polygon_proxy_mapping():
+    assert research.EQUITY_TICKER_OVERRIDES["SPYX"] == "SPY"
+    assert research.EQUITY_TICKER_OVERRIDES["NVDAX"] == "NVDA"
+    assert research.EQUITY_TICKER_OVERRIDES["GOOGLX"] == "GOOGL"
+    assert research.EQUITY_TICKER_OVERRIDES["TSLAX"] == "TSLA"
+    assert research.EQUITY_TICKER_OVERRIDES["AAPLX"] == "AAPL"
+    assert research.EQUITY_TICKER_OVERRIDES["WTIOIL"] == "USO"
 
 
 def test_select_assets_can_use_active_discovered_assets():

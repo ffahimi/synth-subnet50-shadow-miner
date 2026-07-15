@@ -1041,9 +1041,28 @@ Run a longer study:
   --retry-sleep-seconds 10
 ```
 
-Probe Synth equity/commodity coverage. This checks a broad candidate list of
-commodity symbols, ETFs, sector ETFs, and large-cap equities against Synth
-prompts, then writes `synth_equity_prompt_coverage.csv`:
+Synth equity/commodity validation uses Synth-specific asset symbols, not raw
+market tickers. The default `--equities` set is:
+
+```text
+XAU, SPYX, NVDAX, GOOGLX, TSLAX, AAPLX, WTIOIL, SPCX
+```
+
+For Polygon market-regime features, the script maps these to data tickers:
+
+```text
+XAU -> C:XAUUSD
+SPYX -> SPY
+NVDAX -> NVDA
+GOOGLX -> GOOGL
+TSLAX -> TSLA
+AAPLX -> AAPL
+WTIOIL -> USO
+SPCX -> SPCX
+```
+
+Probe Synth equity/commodity coverage, then writes
+`synth_equity_prompt_coverage.csv`:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
@@ -1069,12 +1088,10 @@ selected assets for the smoke test:
   --output-dir data/reports/synth_active_equity_minute_smoke
 ```
 
-Run the full study for all currently active Synth equity/commodity assets:
+Run the full 90-day study for the Synth equity/commodity validation assets:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
-  --discover-synth-equities \
-  --use-active-discovered-assets \
   --equities \
   --days 90 \
   --top-n 25 \
@@ -1086,10 +1103,8 @@ Run the full study for all currently active Synth equity/commodity assets:
   --retry-sleep-seconds 10
 ```
 
-If Synth currently exposes only `XAU` in the active prompt probe, the active
-asset run will correctly analyze only `XAU`. If Synth adds `SPY`, `AAPL`, or
-other equity symbols later, the same command automatically includes them without
-changing code.
+To run a subset, pass Synth asset symbols explicitly, for example
+`--assets SPYX NVDAX AAPLX`.
 
 Outputs are written under `data/reports/...`, which is ignored by Git. The
 script writes daily miner CRPS, top-N persistence, market-regime summaries, and

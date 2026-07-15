@@ -264,10 +264,30 @@ If only Synth score consistency is needed and Polygon features can be skipped:
   --skip-polygon
 ```
 
-Probe Synth equity/commodity prompt coverage. The candidate list includes
-commodities, broad ETFs, sector ETFs, and common large-cap equities. The probe
-writes `synth_equity_prompt_coverage.csv` and marks which assets returned
-active Synth prompts:
+Synth equity/commodity validation uses Synth-specific symbols rather than raw
+market tickers:
+
+```text
+XAU, SPYX, NVDAX, GOOGLX, TSLAX, AAPLX, WTIOIL, SPCX
+```
+
+For market-regime features, the script maps those Synth symbols to Polygon
+data tickers:
+
+```text
+XAU -> C:XAUUSD
+SPYX -> SPY
+NVDAX -> NVDA
+GOOGLX -> GOOGL
+TSLAX -> TSLA
+AAPLX -> AAPL
+WTIOIL -> USO
+SPCX -> SPCX
+```
+
+Probe Synth equity/commodity prompt coverage. The probe writes
+`synth_equity_prompt_coverage.csv` and marks which assets returned active Synth
+prompts:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
@@ -296,18 +316,15 @@ coverage probe:
   --output-dir data/reports/synth_active_equity_minute_smoke
 ```
 
-Configured assets such as `XAU` use `config/default.yaml`. Research-only equity
-symbols discovered by the probe can also be passed directly through `--assets`;
-the script dynamically maps them to Synth `com-equ-24h` and uses the same symbol
-as the Polygon ticker unless an override is defined.
+Configured assets such as `XAU` use `config/default.yaml`. Other Synth equity
+symbols can be passed directly through `--assets`; the script dynamically maps
+them to Synth `com-equ-24h` and to the Polygon ticker/proxy above.
 
-Run a full miner-performance study for all active Synth equity/commodity assets
-with score-level market-state features:
+Run a full miner-performance study for all Synth equity/commodity validation
+assets with score-level market-state features:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
-  --discover-synth-equities \
-  --use-active-discovered-assets \
   --equities \
   --days 90 \
   --top-n 25 \
@@ -319,9 +336,8 @@ with score-level market-state features:
   --retry-sleep-seconds 10
 ```
 
-If the Synth probe currently finds only `XAU`, the active-asset command analyzes
-only `XAU`. When Synth exposes additional equity prompt assets, the same command
-will include those symbols automatically.
+To run only a subset, pass Synth asset symbols explicitly, for example
+`--assets SPYX NVDAX AAPLX`.
 
 Generated outputs include:
 
