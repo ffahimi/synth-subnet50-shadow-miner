@@ -48,13 +48,34 @@ DEFAULT_EQUITY_ASSETS = ("XAU",)
 EQUITY_COMPETITION = "com-equ-24h"
 EQUITY_TICKER_OVERRIDES = {
     "XAU": "C:XAUUSD",
+    "XAG": "C:XAGUSD",
 }
 DEFAULT_SYNTH_EQUITY_CANDIDATES = (
     "XAU",
+    "XAG",
+    "GLD",
+    "SLV",
+    "USO",
     "SPY",
     "QQQ",
     "IWM",
     "DIA",
+    "VOO",
+    "VTI",
+    "TLT",
+    "HYG",
+    "EEM",
+    "EFA",
+    "XLF",
+    "XLK",
+    "XLE",
+    "XLI",
+    "XLV",
+    "XLY",
+    "XLP",
+    "XLU",
+    "XLB",
+    "XLRE",
     "AAPL",
     "MSFT",
     "NVDA",
@@ -67,6 +88,37 @@ DEFAULT_SYNTH_EQUITY_CANDIDATES = (
     "AMD",
     "MSTR",
     "COIN",
+    "AVGO",
+    "ORCL",
+    "ADBE",
+    "CRM",
+    "INTC",
+    "IBM",
+    "QCOM",
+    "MU",
+    "JPM",
+    "BAC",
+    "GS",
+    "MS",
+    "V",
+    "MA",
+    "UNH",
+    "LLY",
+    "JNJ",
+    "PFE",
+    "MRK",
+    "XOM",
+    "CVX",
+    "COP",
+    "CAT",
+    "BA",
+    "GE",
+    "WMT",
+    "COST",
+    "HD",
+    "MCD",
+    "DIS",
+    "NKE",
 )
 FEATURE_WINDOWS_HOURS = (1, 3, 5, 8, 24)
 SESSION_NAMES = ("eu", "eu_us_overlap", "us", "outside_market_hours", "weekend")
@@ -90,6 +142,11 @@ def parse_args() -> argparse.Namespace:
         "--discover-only",
         action="store_true",
         help="Exit after --discover-synth-equities instead of running miner analysis.",
+    )
+    parser.add_argument(
+        "--use-active-discovered-assets",
+        action="store_true",
+        help="After --discover-synth-equities, analyze every candidate with active Synth prompts.",
     )
     parser.add_argument(
         "--synth-equity-candidates",
@@ -788,6 +845,19 @@ def score_feature_correlations(score_features: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("corr_crps") if rows else pd.DataFrame(rows)
 
 
+def select_assets_for_run(args: argparse.Namespace, discovered: pd.DataFrame | None) -> list[str]:
+    selected_assets = [asset.upper() for asset in args.assets]
+    if args.equities and selected_assets == list(DEFAULT_ASSETS):
+        selected_assets = list(DEFAULT_EQUITY_ASSETS)
+    if args.use_active_discovered_assets:
+        if discovered is None:
+            raise SystemExit("--use-active-discovered-assets requires --discover-synth-equities.")
+        selected_assets = discovered.loc[discovered["active"], "asset"].astype(str).str.upper().tolist()
+        if not selected_assets:
+            raise SystemExit("No active Synth equity/commodity assets discovered.")
+    return selected_assets
+
+
 def analyze_asset(
     asset: str,
     args: argparse.Namespace,
@@ -909,6 +979,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     end = pd.Timestamp(utc_now()).floor("min")
     start = end - pd.Timedelta(days=int(args.days))
+    discovered: pd.DataFrame | None = None
 
     if args.discover_synth_equities:
         discovered = discover_synth_assets(
@@ -924,9 +995,9 @@ def main() -> None:
             print(f"\nSaved Synth equity coverage probe to {output_dir}")
             return
 
-    selected_assets = [asset.upper() for asset in args.assets]
-    if args.equities and selected_assets == list(DEFAULT_ASSETS):
-        selected_assets = list(DEFAULT_EQUITY_ASSETS)
+    selected_assets = select_assets_for_run(args, discovered)
+    if args.use_active_discovered_assets:
+        print(f"Using active discovered assets: {', '.join(selected_assets)}", flush=True)
 
     if args.polygon_minute_smoke and not args.skip_polygon:
         smoke_rows = []

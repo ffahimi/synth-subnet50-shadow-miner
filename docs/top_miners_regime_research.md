@@ -38,7 +38,9 @@ ETH: 456,133 valid score rows, 1,936 score snapshots, 91 calendar days
 Market data:
 
 ```text
-Polygon 5-minute BTC/ETH aggregates
+Crypto regime tables use the repo's existing market feature flow.
+Equity/commodity score-level research can fetch Polygon 1-minute bars for the
+same forecast-origin window.
 ```
 
 Features:
@@ -262,9 +264,10 @@ If only Synth score consistency is needed and Polygon features can be skipped:
   --skip-polygon
 ```
 
-Probe Synth equity/commodity prompt coverage. As of the latest local probe,
-`XAU` returned active prompts while common equity tickers such as `SPY`, `QQQ`,
-`AAPL`, `MSFT`, `NVDA`, and `TSLA` returned no prompts for the sampled day:
+Probe Synth equity/commodity prompt coverage. The candidate list includes
+commodities, broad ETFs, sector ETFs, and common large-cap equities. The probe
+writes `synth_equity_prompt_coverage.csv` and marks which assets returned
+active Synth prompts:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
@@ -278,17 +281,19 @@ Probe Synth equity/commodity prompt coverage. As of the latest local probe,
 Smoke-test Polygon 1-minute data for the active equity/commodity asset before a
 long analysis. The smoke output includes row count, first/last timestamp,
 minimum/median spacing, one-minute gap rate, and any error. The longer lookback
-helps avoid false negatives around equity market closures:
+helps avoid false negatives around equity market closures. Use
+`--use-active-discovered-assets` to smoke-test every active asset returned by the
+coverage probe:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
+  --discover-synth-equities \
+  --use-active-discovered-assets \
   --equities \
-  --assets XAU \
-  --days 1 \
   --polygon-minute-smoke \
-  --polygon-smoke-lookback-hours 72 \
+  --polygon-smoke-lookback-hours 120 \
   --polygon-smoke-only \
-  --output-dir data/reports/xau_minute_smoke
+  --output-dir data/reports/synth_active_equity_minute_smoke
 ```
 
 Configured assets such as `XAU` use `config/default.yaml`. Research-only equity
@@ -296,19 +301,27 @@ symbols discovered by the probe can also be passed directly through `--assets`;
 the script dynamically maps them to Synth `com-equ-24h` and uses the same symbol
 as the Polygon ticker unless an override is defined.
 
-Run a full XAU miner-performance study with score-level market-state features:
+Run a full miner-performance study for all active Synth equity/commodity assets
+with score-level market-state features:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
+  --discover-synth-equities \
+  --use-active-discovered-assets \
   --equities \
-  --assets XAU \
-  --days 180 \
+  --days 90 \
   --top-n 25 \
-  --output-dir data/reports/top_miners_xau_research_180d \
+  --polygon-minute-smoke \
+  --polygon-smoke-lookback-hours 120 \
+  --output-dir data/reports/top_miners_active_equities_research_90d \
   --synth-timeout-seconds 120 \
   --max-retries 6 \
   --retry-sleep-seconds 10
 ```
+
+If the Synth probe currently finds only `XAU`, the active-asset command analyzes
+only `XAU`. When Synth exposes additional equity prompt assets, the same command
+will include those symbols automatically.
 
 Generated outputs include:
 

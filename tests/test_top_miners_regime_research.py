@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "top_miners_regime_research.py"
@@ -71,6 +73,59 @@ def test_dynamic_equity_config_uses_xau_polygon_override():
     config = research.dynamic_equity_config(base_config, "XAU")
 
     assert config["polygon_ticker"] == "C:XAUUSD"
+
+
+def test_dynamic_equity_config_uses_xag_polygon_override():
+    base_config = {
+        "asset": "BTC",
+        "polygon_ticker": "X:BTCUSD",
+        "assets": {},
+        "synth": {"asset": "BTC", "competition": "crypto-24h"},
+    }
+
+    config = research.dynamic_equity_config(base_config, "XAG")
+
+    assert config["polygon_ticker"] == "C:XAGUSD"
+
+
+def test_default_synth_equity_candidates_cover_common_equities_and_etfs():
+    candidates = set(research.DEFAULT_SYNTH_EQUITY_CANDIDATES)
+
+    assert {"XAU", "GLD", "SPY", "QQQ", "AAPL", "NVDA", "XLF", "XLK"}.issubset(candidates)
+
+
+def test_select_assets_can_use_active_discovered_assets():
+    args = SimpleNamespace(
+        assets=list(research.DEFAULT_ASSETS),
+        equities=True,
+        use_active_discovered_assets=True,
+    )
+    discovered = pd.DataFrame({"asset": ["XAU", "SPY", "AAPL"], "active": [True, False, True]})
+
+    selected = research.select_assets_for_run(args, discovered)
+
+    assert selected == ["XAU", "AAPL"]
+
+
+def test_select_assets_requires_discovery_when_using_active_discovered_assets():
+    args = SimpleNamespace(
+        assets=list(research.DEFAULT_ASSETS),
+        equities=True,
+        use_active_discovered_assets=True,
+    )
+
+    with pytest.raises(SystemExit, match="requires --discover-synth-equities"):
+        research.select_assets_for_run(args, None)
+
+
+def test_equities_default_to_configured_equity_assets_without_discovery():
+    args = SimpleNamespace(
+        assets=list(research.DEFAULT_ASSETS),
+        equities=True,
+        use_active_discovered_assets=False,
+    )
+
+    assert research.select_assets_for_run(args, None) == list(research.DEFAULT_EQUITY_ASSETS)
 
 
 def test_score_feature_join_uses_forecast_origin_time():

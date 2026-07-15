@@ -1041,7 +1041,9 @@ Run a longer study:
   --retry-sleep-seconds 10
 ```
 
-Probe Synth equity/commodity coverage:
+Probe Synth equity/commodity coverage. This checks a broad candidate list of
+commodity symbols, ETFs, sector ETFs, and large-cap equities against Synth
+prompts, then writes `synth_equity_prompt_coverage.csv`:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
@@ -1052,34 +1054,42 @@ Probe Synth equity/commodity coverage:
   --output-dir data/reports/synth_equity_coverage
 ```
 
-Smoke-test 1-minute market data for the active Synth equity/commodity asset:
+Smoke-test 1-minute market data for every active Synth equity/commodity symbol
+found by the coverage probe. The script uses the active discovered assets as the
+selected assets for the smoke test:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
+  --discover-synth-equities \
+  --use-active-discovered-assets \
   --equities \
-  --assets XAU \
-  --days 1 \
   --polygon-minute-smoke \
-  --polygon-smoke-lookback-hours 72 \
+  --polygon-smoke-lookback-hours 120 \
   --polygon-smoke-only \
-  --output-dir data/reports/xau_minute_smoke
+  --output-dir data/reports/synth_active_equity_minute_smoke
 ```
 
-Run the full XAU equity/commodity miner-performance study:
+Run the full study for all currently active Synth equity/commodity assets:
 
 ```bash
 .venv/bin/python scripts/top_miners_regime_research.py \
+  --discover-synth-equities \
+  --use-active-discovered-assets \
   --equities \
-  --assets XAU \
-  --days 180 \
+  --days 90 \
   --top-n 25 \
   --polygon-minute-smoke \
-  --polygon-smoke-lookback-hours 72 \
-  --output-dir data/reports/top_miners_xau_research_180d \
+  --polygon-smoke-lookback-hours 120 \
+  --output-dir data/reports/top_miners_active_equities_research_90d \
   --synth-timeout-seconds 120 \
   --max-retries 6 \
   --retry-sleep-seconds 10
 ```
+
+If Synth currently exposes only `XAU` in the active prompt probe, the active
+asset run will correctly analyze only `XAU`. If Synth adds `SPY`, `AAPL`, or
+other equity symbols later, the same command automatically includes them without
+changing code.
 
 Outputs are written under `data/reports/...`, which is ignored by Git. The
 script writes daily miner CRPS, top-N persistence, market-regime summaries, and
