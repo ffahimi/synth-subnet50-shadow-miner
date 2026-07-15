@@ -457,6 +457,8 @@ def score_feature_join(
     """Match each score snapshot to the market state at forecast origin time."""
     left = scores.sort_values("feature_timestamp").copy()
     right = features.sort_values("timestamp").copy()
+    left["feature_timestamp"] = pd.to_datetime(left["feature_timestamp"], utc=True).astype("datetime64[ns, UTC]")
+    right["timestamp"] = pd.to_datetime(right["timestamp"], utc=True).astype("datetime64[ns, UTC]")
     joined = pd.merge_asof(
         left,
         right,
